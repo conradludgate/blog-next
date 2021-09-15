@@ -1,0 +1,43 @@
+@import "themes/light.scss", "themes/dark.scss";
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen,
+    Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
+
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+}
+
+html, body, #root, #__next {
+	height: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+$languages: ts, tsx, go, rust, mdx, scss;
+
+@each $language in $languages {
+  pre.language-#{$language}::before {
+    content: "#{$language}";
+
+    position: absolute;
+    right: 15px;
+    top: 10px;
+    font-size: 0.9em;
+  }
+
+  pre.language-#{$language} {
+    margin-top: 10px;
+    position: relative;
+  }
+}

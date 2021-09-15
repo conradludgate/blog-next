@@ -1,0 +1,322 @@
+import Layout from '../../layouts/BlogPost'
+
+export const meta = {
+    title: "Dynamic Stylesheets and Yew",
+    date: "2020-04-12",
+    tags: ["dev", "rust", "yew", "react", "front-end"],
+}
+
+export default ({ children }) => <Layout meta={meta}>{children}</Layout>
+
+I recently discovered a really cool front-end framework written in [Rust](https://rust-lang.org/) called [Yew](https://yew.rs/).
+I feel like it's a spiritual cross between the functional language [Elm](https://elm-lang.org/) and [React](https://reactjs.org/).
+
+## Background
+
+Before I talk about Yew, let's start off talking about React since a lot of front end engineers know React very well
+
+React is undeniably one of the largest front-end frameworks at the moment, 
+and it's currently my first choice if I need to build a website, 
+but unfortuanately it uses JavaScript (or TypeScript).
+
+What's so bad about that? After working on front end projects professionally for a few months,
+I've learnt that I really do not like working with Js. A lot of people do, and that's fine,
+but I've tried and I just can't learn to love it.
+There's probably an entire post about what I dislike about js so I'm not going to go into the details here.
+
+### How does React work?
+
+On a surface level, React works by having a 'virtual DOM' (or VDOM), a js representation of the current web page.
+It then uses this VDOM to figure out which functions to run on specific events and which elements to update, if any.
+If used correctly, it can and will only call functions if there's content that needs to be updated.
+
+## How does Yew differ?
+
+Yew is built upon Rust, which is a very modern imperitive language but with a lot of functional aspects.
+It's been shown to be extremely fast, very memory efficient and very memory safe.
+
+Yew works very similar to React. As a demonstration, let's make a Button component in both React and Yew
+
+**React**
+```tsx
+class Button extends React.Component {
+    constructor(props) {
+        super(props);
+
+        this.state = {
+            clicked: false,
+        };
+
+        this.handleClick.bind(this)
+    }
+
+    handleClick() {
+        if (!this.state.clicked) {            
+            this.props.onClick();
+            this.setState({
+                clicked: true,
+            })
+        }
+    }
+
+    render() {
+        if (this.state.clicked) {
+            return <p>Clicked!</p>;
+        } else {
+            return <button onClick={this.handleClick}>
+                {this.props.value}
+            </button>
+        }
+    }
+}
+```
+
+**Yew**
+```rust
+pub struct Button {
+    clicked: bool,
+    props: ButtonProps
+    link: ComponentLink<Self>,
+}
+
+#[derive(Properties)]
+pub struct ButtonProps {
+    onclick: Callback<MouseEvent>,
+    value: String,
+}
+
+enum Msg {
+    Click(MouseEvent),
+}
+
+impl Component for Button {
+    type Properties = ButtonProps;
+    type Message = Msg;
+
+    fn create(
+        props: Self::Properties,
+        link: ComponentLink<Self>
+    ) -> Self {
+        Button { clicked: false, props, link }
+    }
+
+    fn update(&mut self, msg: Self::Message) -> ShouldRender {
+        match (self.clicked, msg) {
+            (false, Msg::Clicked(let event)) => {
+                self.props.onclick.emit(event);
+                self.clicked = true;
+                true
+            },
+            _ => false,
+        }
+    }
+
+    fn view(&self) -> Html {
+        if self.clicked {
+            html! {
+                <p>{"Clicked!"}</p>
+            }
+        } else {
+            let onclick = self.link.callback(
+                |event| Msg::Click(event)
+            );
+
+            html! {
+                <button onclick=onclick>
+                    {self.props.value}
+                </button>
+            }
+        }
+    }
+}
+```
+
+Realistically, they're quite similar. Both examples have a type that is a component.
+They both have a render function that returns HTML formatted code.
+And they each have an update function.
+
+In Yew's case, everything is a little more specific, however it's not too verbose.
+It would be similar situation if you were using TypeScript with React.
+
+This is great for me. I'm not a fan of JS but I like React. Yew lets me use the same
+concepts as React but in a language I am more fond of.
+
+## What are the downsides of Yew?
+
+Currently, [there is no agreed upon way of styling components in Yew](https://github.com/yewstack/yew/issues/533).
+Of course you can create static stylesheets and reference those classnames. However, React has shown that
+dynamic stylesheets can be useful and are very popular. And systems like Less and Sass show that CSS can be a lot
+more powerful than it is.
+
+## What am I doing about it?
+
+I've been working on an addition to Yew in my own time with a CSS macro.
+Currently it can parse expressions like
+
+```rust
+let height = 100;
+
+let (button, container);
+let stylesheet = css! {
+    $button {
+        width: 10;
+        height: 100 * percent;
+    }
+
+    $container {
+        height: height * px;
+    }
+
+    $container .a {
+        color: "red";
+        text-decoration: "underlined";
+    }
+};
+```
+
+This sets the two variables `button` and `container` and `stylesheet` is a String
+that would be the compiled version of those styles. The value in the style is evaluated as a
+standard rust expression, so it supports variables and calculations without anything complicated.
+
+There are a few limitation to Rust macros that make this slightly awkward however. Take this example
+
+```scss
+.a .b {
+    color: red;
+}
+```
+
+is a different style to
+
+```scss
+.a.b {
+    color: red;
+}
+```
+
+However, in rust, there's no way to differentiate `.a.b` with `.a .b`, infact,
+what we actually parse is `. a . b` or as a token stream `Punct(".") Ident("a") Punct(".") Ident("b")`.
+This is clearly a problem. I've decided that I will take inspiration from nested css syntax to make this work
+
+```scss
+.a {
+    &.b {
+        color: red;
+    }
+}
+```
+
+will be the same as 
+
+```scss
+.a & .b {
+    color: red;
+}
+```
+
+which will represent an element with both classes `a` and `b`
+
+whereas
+
+```scss
+.a .b {
+    color: red;
+}
+```
+
+will represent an element with class `a` that contains an element with class `b`.
+
+I do also want to support a basic form of nested CSS, since that isn't too hard to parse.
+
+### Compile time checking
+
+I eventually want to make the library do compile time checks and automatic prefixing. For example,
+
+```rust
+css! {
+    div {
+        width: "red";
+    }
+}
+```
+
+Wouldn't cause the website to crash, but it wouldn't render correctly. This is a bug.
+Since types in rust have to be known at compile time, we could use this to our advantage.
+
+A css width value could only accept values that conform to `Into<Width>` or `T: Width` (I'm unsure of whether to use a type or a trait as of yet).
+Infact, colours could be the same. They will only accept values like `color::red` or `(255, 0, 0)` or `color::hsl(0.0, 1.0, 0.5)`
+
+As for prefixing, that would be rather simple. A value of type BoxShadow could generate 2 css values evaluated instead of just the one.
+
+```rust
+css! {
+    div {
+        box-shadow: BoxShadow {
+            offset: (0, 0),
+            blur: 2,
+            spread: 2,
+            color: color::black,
+        };
+    }
+}
+```
+
+could evaluate into
+
+```scss
+div {
+            box-shadow: 0 0 2px 2px black;
+    -webkit-box-shadow: 0 0 2px 2px black;
+}
+```
+
+This would require a lot of work, however. And it might make the compiler quite slow since it has a lot of checks to perform.
+I guess it could be an opt in config feature, but it avoids the need of another linter.
+
+It also can be restrictive if this library falls behind the current CSS standards.
+It would need to be configurable and extendable by the user.
+
+### Optimised updates
+
+The front end updates fast because the frameworks of React and Yew only update the DOM objects that have actually been updated.
+This is possible because it's relatively easy to take the difference of a tree and elements in the browser are directly referenceable.
+
+CSS does not work this way. CSS is not a tree structure, it's a linear structure. So it's possible to have styles like
+
+```scss
+.a, .b {
+    color: black;
+}
+
+.a {
+    color: red;
+}
+
+.a {
+    color: black;
+}
+
+.a {
+    color: black;
+}
+```
+
+and this isn't an issue. However, how should the library process this to reduce the footprint,
+and, how should it react if I want to update the third style block to contain `color: red` from within a component.
+
+I could render each component's style in a style element along side the content it's styling,
+but that would be messy for when you're looking through the inspector.
+
+I could do something similar, where each component gets their own style element but stored in the head instead.
+I think this is the most sensible solution at the moment but I need to do more research into how exactly
+the libraries like [emotion](https://emotion.sh/) and [Material UI](https://material-ui.com/) in React work.
+
+There's one final thing, unique class names. That should be an easy thing to solve. Any time a variable selector name is used,
+it can access a global pointer and increment it and append that number to the class name.
+
+For obfuscated classes in a production environment, I could also use a random start value and a hash to convert the counter into a string of 5 upper or lowercase characters, but this isn't a crucial addition.
+
+## Conclusion
+
+Anyway, this is a fun project to work on regardless. I'm learning a lot more about how the internals of web frameworks work
+and about the finer details of precedural rust macros.

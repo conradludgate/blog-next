@@ -1,0 +1,21 @@
+.ThemeButton {
+    border: none;
+    background-color: inherit;
+
+    position: relative;
+    width: 40px;
+    height: 40px;
+}
+
+.ThemeButton div {
+    fill: var(--color-fg);
+    /* transition: 2s; */
+    /* position: absolute;
+    width: 20px;
+    left: 10px;
+    top: 10px; */
+}
+
+.ThemeButton div svg {
+    width: 20px;
+}

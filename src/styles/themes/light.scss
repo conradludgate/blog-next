@@ -1,0 +1,9 @@
+@mixin light-theme {
+	--color-bg: white;
+	--color-fg: #5f5f5f;
+}
+
+:root {
+	@import "prism/light.scss";
+	@include light-theme;
+}

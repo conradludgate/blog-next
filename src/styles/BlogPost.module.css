@@ -1,0 +1,34 @@
+.BlogPost {
+	display: grid;
+	grid-template-columns: 1fr min(80ch, 100%) 1fr;
+}
+
+.BlogPost > * {
+	grid-column: 2;
+}
+
+.BlogPost .full-bleed {
+	width: 100%;
+	grid-column: 1 / 4;
+}
+
+.BlogPost :global nav.toc {
+	grid-column: 1;
+	position: fixed;
+}
+
+.BlogPost :global nav.toc ol {
+	padding-left: 1.5em;
+}
+
+.BlogPost :global nav.toc ol.toc-level-1 > li {
+	list-style-type: disc;
+}
+
+.BlogPost :global nav.toc ol.toc-level-2 > li {
+	list-style-type: circle;
+}
+
+.selected {
+	color: red;
+}

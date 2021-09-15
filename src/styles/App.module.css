@@ -1,8 +1,14 @@
-.App {
-	display: grid;
-	grid-template-rows: 100px 1fr;
+.App > header {
+	height: 5em;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 1em;
 }
 
-.Content {
-	grid-row: 2;
+.App > header > a {
+	font-family: noto serif, segoe ui, helvetica neue, Helvetica, Roboto, FreeSans, serif;
+	font-size: 1.5em;
+	text-decoration: none;
+	margin-top: 0.75em;
 }

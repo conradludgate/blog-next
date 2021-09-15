@@ -2,11 +2,10 @@ import '../styles/globals.scss'
 import Head from "next/head";
 import { AppProps } from "next/app";
 import { useRouter } from 'next/router'
+import Link from 'next/link'
 import { ReactElement, useEffect } from "react";
-import Header from '../components/Header';
 import styles from '../styles/App.module.css';
 import { trackView } from '../lib/umami';
-import { ThemeProvider } from 'next-themes';
 
 export default function App({ Component, pageProps }: AppProps): ReactElement {
 	const router = useRouter();
@@ -21,11 +20,14 @@ export default function App({ Component, pageProps }: AppProps): ReactElement {
 		}
 		router.events.on('beforeHistoryChange', handleRouteChange)
 		return () => { router.events.off('beforeHistoryChange', handleRouteChange) }
-	}, [])
+	}, [router.events])
 
 	return <div className={styles.App}>
 		<Head>
 		</Head>
+		<header>
+			<Link href="/"><a>Conrad Ludgate</a></Link>
+		</header>
 		<div className={styles.Content}>
 			<Component {...pageProps} />
 		</div>

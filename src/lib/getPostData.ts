@@ -1,24 +1,28 @@
-// import posts, { _importMeta as metadata } from "../pages/posts/*.mdx";
+import { promises as fs } from "fs";
+import { ReactElement, ReactNode } from "react";
 
 export interface PostData {
     path: string;
     title: string;
     date: string;
     tags: string[];
+    desc: string;
 };
 
 export default async function getPostData(): Promise<PostData[]> {
-    // console.log({posts, metadata});
+    let pages = await fs.readdir("src/pages/posts/");
 
-    // return Object.entries(posts).map(([id, post]) => {
-    //     //@ts-ignore
-    //     const meta = post("").props.meta;
+    return await Promise.all(pages.map(async (page) => {
+        const file = page.endsWith(".mdx") ? page : page + "/index.mdx";
+        const id = page.split(".mdx")[0];
 
-    //     return {
-    //         path: "/posts/" + id,
-    //         ...meta,
-    //     };
-    // })
+        //@ts-ignore
+        const { meta } = await import(`../pages/posts/${file}`);
 
-    return []
+        return {
+            path: "/posts/" + id,
+            ...meta,
+        };
+    }));
+
 }

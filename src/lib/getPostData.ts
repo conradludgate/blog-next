@@ -1,5 +1,4 @@
 import { promises as fs } from "fs";
-import { ReactElement, ReactNode } from "react";
 
 export interface PostData {
     path: string;
@@ -12,7 +11,7 @@ export interface PostData {
 export default async function getPostData(): Promise<PostData[]> {
     let pages = await fs.readdir("src/pages/posts/");
 
-    return await Promise.all(pages.map(async (page) => {
+    const postData = await Promise.all(pages.map(async (page) => {
         const file = page.endsWith(".mdx") ? page : page + "/index.mdx";
         const id = page.split(".mdx")[0];
 
@@ -25,4 +24,9 @@ export default async function getPostData(): Promise<PostData[]> {
         };
     }));
 
+	postData.sort((a, b) => {
+		return a.date > b.date ? -1 : 1
+	});
+
+    return postData;
 }

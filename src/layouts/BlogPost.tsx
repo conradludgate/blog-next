@@ -1,5 +1,6 @@
 import Head from "next/head";
-import { ReactElement, useEffect, useRef } from "react";
+import Link from "next/link";
+import { ReactElement } from "react";
 import humanDate from "../lib/date";
 import { PostData } from "../lib/getPostData";
 import styles from "../styles/BlogPost.module.css";
@@ -18,6 +19,11 @@ export default function BlogPost({ children, meta }: BlogProps): ReactElement {
 			<h1>{meta.title}</h1>
 			<span>{humanDate(meta.date)}</span>
 			{children}
+			<footer className={styles.Footer}>
+				{meta.tags.map((tag, key) => {
+					return <Link key={key} href={"/tags/" + tag}><a>#{tag}</a></Link>
+				})}
+			</footer>
 		</div>
 	</div>
 }

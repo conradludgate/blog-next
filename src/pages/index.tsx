@@ -3,6 +3,7 @@ import Link from "next/link";
 import { GetStaticProps } from 'next';
 import getPostData, { PostData } from "../lib/getPostData";
 import humanDate from '../lib/date';
+import { generateRss } from '../lib/rss';
 
 export interface Posts {
 	posts: PostData[];
@@ -39,9 +40,10 @@ export function Post({ path, title, date, tags, desc }: PostData) {
 
 export const getStaticProps: GetStaticProps = async (context) => {
 	let postData = await getPostData();
-	postData.sort((a, b) => {
-		return a.date > b.date ? -1 : 1
-	});
+
+	const rss = await generateRss(postData)
+	const { writeFile } = require("fs/promises");
+	await writeFile('./public/index.xml', rss);
 
 	return {
 		props: {

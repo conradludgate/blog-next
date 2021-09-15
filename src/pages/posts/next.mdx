@@ -1,0 +1,22 @@
+import Layout from '../../layouts/BlogPost'
+
+export const meta = {
+    title: "New blog front end",
+    date: "2021-09-15",
+    tags: ["react", "nextjs"],
+    desc: "I've decided to rewrite my blogging front end in nextjs",
+}
+
+export default ({ children }) => <Layout meta={meta}>{children}</Layout>
+
+It's been 9 months since my last blog post and I've decided to rewrite my blog front end.
+
+My blog was originally setup using [Hugo](https://gohugo.io/) and hosted on [Github Pages](https://pages.github.com/).
+While I really liked that the site was a static set of files, I found customising Hugo quite a bit of work.
+
+I've moved to using [NextJS](https://nextjs.org/) instead, hosted on [Vercel](https://vercel.com/home).
+I feel this setup gives me the flexibility of React, while giving me the power of having a fast/static generated site.
+
+I don't expect this rewrite will inspire me to write more blog posts, but I do have an idea I want to write about, so expect one soon :)
+
+That's all from me 👋

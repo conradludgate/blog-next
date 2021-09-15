@@ -15,6 +15,10 @@
   padding-bottom: 1.5em;
 }
 
+.Post > a {
+  text-decoration: none;
+}
+
 .PostFooter {
   color: #ababab;
 }
@@ -27,6 +31,8 @@
 .PostFooterTags > a {
   margin-left: 0.75em;
   display: inline;
+  color: #ababab;
+  text-decoration: none;
 }
 
 .PostFooterTags > a:hover {

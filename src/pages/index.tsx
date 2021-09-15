@@ -21,7 +21,7 @@ export default function Home({ posts }: Posts) {
 
 export function Post({ path, title, date, tags, desc }: PostData) {
 	return <div className={styles.Post}>
-		<Link href={path}>
+		<Link prefetch={false} href={path}>
 			<a>
 				<h2>{title}</h2>
 				<p>{desc}</p>
@@ -29,7 +29,7 @@ export function Post({ path, title, date, tags, desc }: PostData) {
 					<time>{humanDate(date)}</time>
 					<div className={styles.PostFooterTags}>
 						{tags.map((tag, key) => {
-							return <Link key={key} href={"/tags/" + tag}><a>#{tag}</a></Link>
+							return <Link prefetch={false} key={key} href={"/tags/" + tag}><a>#{tag}</a></Link>
 						})}
 					</div>
 				</div>

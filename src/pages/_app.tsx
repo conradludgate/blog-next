@@ -26,7 +26,7 @@ export default function App({ Component, pageProps }: AppProps): ReactElement {
 		<Head>
 		</Head>
 		<header>
-			<Link href="/"><a>Conrad Ludgate</a></Link>
+			<Link href="/" prefetch={false}><a>Conrad Ludgate</a></Link>
 		</header>
 		<div className={styles.Content}>
 			<Component {...pageProps} />

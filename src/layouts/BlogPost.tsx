@@ -17,7 +17,7 @@ export default function BlogPost({ children, meta }: BlogProps): ReactElement {
 		</Head>
 		<div>
 			<h1>{meta.title}</h1>
-			<span>{humanDate(meta.date)}</span>
+			<time>{humanDate(meta.date)}</time>
 			{children}
 			<footer className={styles.Footer}>
 				{meta.tags.map((tag, key) => {

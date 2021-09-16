@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Conrad Ludgate</title>
+    <link>https://conradludgate.com/</link>
+    <description>Ramblings from Conrad Ludgate</description>
+    <language>en</language>
+    <lastBuildDate>Thu, 16 Sep 2021 00:00:00 GMT</lastBuildDate>
+    <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
+    
+    <item>
+      <guid>https://conradludgate.com/posts/k8s</guid>
+      <title>A tale of deployments</title>
+      <description>This is the tale of my many years of deploying apps to the internet. From my humble beginnings to automatic deployment and service management.</description>
+      <link>https://conradludgate.com/posts/k8s</link>
+      <pubDate>Thu, 16 Sep 2021 00:00:00 GMT</pubDate>
+    </item>
+
+  </channel>
+</rss>

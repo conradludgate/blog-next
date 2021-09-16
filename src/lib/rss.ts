@@ -22,7 +22,7 @@ export async function generateRss(posts: PostData[]): Promise<string> {
     <link>https://conradludgate.com/</link>
     <description>Ramblings from Conrad Ludgate</description>
     <language>en</language>
-    <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
+    <lastBuildDate>${new Date(posts[0].date).toUTCString()}</lastBuildDate>
     <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
     ${itemsList.join("")}
   </channel>

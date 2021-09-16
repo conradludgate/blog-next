@@ -1,0 +1,10 @@
+a.Footnote {
+    color: rgb(0, 98, 255);
+    font-size: 0.75em;
+    position: relative;
+    top: -0.5em;
+}
+
+span.Footnote {
+    color: #ababab;
+}

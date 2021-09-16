@@ -1,5 +1,3 @@
-import { randomBytes } from "crypto";
-
 function post(url: string, data: any) {
     const req = new XMLHttpRequest();
     req.open('POST', url, true);
@@ -7,7 +5,7 @@ function post(url: string, data: any) {
     req.send(JSON.stringify(data));
 }
 
-const website = "af63e513-329a-4366-8411-729a44ed643c";
+const website = "bc7baad1-db36-4225-b7c7-ad5edf480238";
 const hostURL = "https://api.conradludgate.com";
 
 function collect(type: "pageview" | "event", params: any, uuid: string) {
@@ -44,7 +42,7 @@ function collect(type: "pageview" | "event", params: any, uuid: string) {
 
 export function trackView(url?: string, referrer?: string) {
     const {
-        location: { host, pathname, search },
+        location: { pathname, search },
     } = window;
     let currentUrl = `${pathname}${search}`;
     let currentRef = document.referrer;

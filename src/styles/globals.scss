@@ -41,6 +41,15 @@ body {
   color: var(--color-fg);
 }
 
+code {
+  font-size: 1.25em;
+  margin: 0 0.25em;
+}
+
+pre > code {
+  margin: unset;
+}
+
 html,
 body,
 #root,

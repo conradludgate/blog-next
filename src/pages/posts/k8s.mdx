@@ -1,0 +1,112 @@
+import Layout from "@/layouts/BlogPost";
+import Footnote from "@/components/Footnote";
+
+export const meta = {
+    title: "A tale of deployments",
+    date: "2021-09-16",
+    tags: ["kubernetes", "terraform"],
+    desc: "This is the tale of my many years of deploying apps to the internet. From my humble beginnings to automatic deployment and service management.",
+};
+
+export default ({ children }) => <Layout meta={meta}>{children}</Layout>;
+
+This is the tale of my many years of deploying apps to the internet.
+From my humble beginnings to automatic deployment and service management.
+
+## In the beginning, there was TMUX
+
+My first ever website I think was some raw HTML and JS running on an Apache Server on my home Windows desktop.
+
+But fast forward a few years, I had started to develop some web-apps written in [Go](https://golang.org) and I wanted to deploy them.
+I ended up paying 10€/month for a VPS with 8GB of memory that could also double as a game server box to share with my friends.
+
+I ran Minecraft, Terarria and my own web servers on there, all within glourious [tmux sessions](https://en.wikipedia.org/wiki/Tmux).
+If you don't know, tmux (**t**erminal **mu**ltiple**x**er) is a tool that lets you have multiple shell sessions open at once, in the background,
+and they survive through logins. It would let me log into my VPS, open the tmux sessions to view my deployments and then I could log out and
+those sessions would still be running.
+
+I used [nginx reverse proxies](https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/) for subdomain routing
+and SSL termination (through [letsencrypt](https://letsencrypt.org/) and [certbot](https://certbot.eff.org/))
+
+It was beautifully simple to deploy a new app. Since I ran Arch Linux both on my home PC and on my VPS, the runtime
+requirements were basically the same. I used this system for a few years, but it did have some problems...
+
+My main language of choice was Go, which is a pretty straight forward language to compile, it downloads the dependencies for you and compiles to a static binary,
+so no [DLL/SO hell](https://en.wikipedia.org/wiki/DLL_Hell). But sometimes I would run Python too.
+Dependencies in python are not as simple since they need to be available in the system, and if two applications need different versions of the same dependency,
+that's awkward to deal with
+
+## Then there was Docker
+
+When I heard about docker, I instantly understood the selling point. You don't just compile the code, but also the environment it will run in.
+Also, I don't need to worry about tmux anymore and my programs closing when I log out because docker will run in the background. It was the perfect system.
+
+I would build my web app, bundle it into a docker image, upload it to my server and then run the docker container. Simple!
+
+I kept my nginx setup from before. I still needed subdomain routing and SSL and Docker didn't provide that for me.
+
+This setup was fine. I would use docker compose for some more involved projects that required databases.
+
+## Welcome Terraform
+
+By this point, I had started working as a developer full time and I had really come to love automated deployment strategies and automated infrastructure.
+I decided I'd try my hand at automating some of my deployments.
+
+I decided to give up on my trusty nginx and give [Caddy](https://caddyserver.com/) a spin. Configuring nginx was a bit cumbersome.
+I'd go into the config folder, copy an existing website template, update the domains and proxy port, restart nginx, run certbot. That was a lot of effort.
+I tried to automate it a bit with some dodgy bash scripts but that workflow didn't really last.
+
+What Caddy brought to the table was an api to configure it, and automatic SSL through letsencrypt, no need to run certbot.
+This meant I could run 1 command and have my reverse proxy up in just under a minute.
+
+I had previously dabbled in writing a [terraform provider for the Spotify API](https://github.com/conradludgate/terraform-provider-spotify)
+so I realised I could use this knowledge and create a [terraform provider for Caddy too](https://github.com/conradludgate/terraform-provider-caddy).
+
+That combined with a [terraform provider for Docker](https://registry.terraform.io/providers/kreuzwerker/docker/latest), I had a simple set of config files
+that I could modify and simply run `terraform apply` to deploy a new app or a new update.
+
+The only issue here is that Caddy has quite bad documentation, and I was writing the terraform provider myself so it ended up being quite limited.
+Combine that with the fact that the docker provider would also sometimes timeout and containers would be deployed but not tracked,
+I would have to log in from time to time and clean up the deployment.
+
+It wasn't perfect, but when it worked, I felt quite proud at what I had made.
+
+## So long Terraform, Here comes Dokku
+
+But it wasn't perfect. I had suffered through it for a while, updating the caddy provider a few times before finding myself on a long train journey reading about
+[Dokku](https://dokku.com/). Now, I have _applications_ as a first class item that I could configure, with SSL, domain names, etc.
+I would `git push` my repositories with Dockerfiles to my Dokku server, Dokku would deploy or update the application. Very easy.
+
+This would have been the end of this blog post if my dokku setup didn't have a crucial flaw. If my VPS crashed, I would need to restart it, and for some reason,
+my applications would not automatically start, and they would not have SSL configured anymore.
+
+This really sucked. Once I deployed an application, I wouldn't want to give it attention as to how it was deployed.
+My previous setups involving docker, nginx, caddy would be self restarting.
+
+This setup ended up being my least used, even though I really wanted to like it. It really seemed great but I just couldn't get used to that annoyance.
+
+## And for our grand finale
+
+In my work I had played around with this ['kubernetes' thing](https://kubernetes.io/). It seemed like the solution for deploying apps on a large scale with
+load balancing, auto scaling, resource management, cluster support across many machines. A complicated setup, definitely not something for me running just a couple apps with
+no need for scaling or load balancing.
+
+It turns out it's definitely for that!
+
+I decided to stop delaying the inevitable and take some courses on k8s. I realise that it's actually quite simple. The configuration files aren't anything more than
+I had previously setup myself.
+
+I gave my server a fresh installation, ran `minikube start --driver=ssh ...` and got a single node cluster running in a single morning<Footnote tag="1"/>.
+
+With my new found knowledge, I got all my previous applications up and running in not a long time. With Prometheus and Grafana being even easier to setup
+than it was on Dokku.
+
+<Footnote tag="1">I had some issues with debian initially. Ubuntu worked well in the end</Footnote>
+
+## This is not the end
+
+I'm sure I'm gonna change things up soon enough. There's a lot of kubernetes tooling out there and the ecosystem is changing all the time.
+Maybe I'll try out Nomad. Maybe a completely different application paradigm will launch and I'll abandon ship.
+
+I'm very thankful for what I got to learn along the way. Every new system I have set up has taught me something new, slowing getting me
+to where I am today. I still put more effort into my applications rather than my devops, but it's still a skill I like to have.

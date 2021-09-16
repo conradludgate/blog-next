@@ -15,5 +15,5 @@ module.exports = withPlugins([
 	withMDX,
 ], {
 	reactStrictMode: true,
-	pageExtensions: ['ts', 'tsx', 'mdx'],
+	pageExtensions: ['ts', 'tsx', 'mdx']
 });

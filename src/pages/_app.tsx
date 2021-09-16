@@ -1,11 +1,11 @@
-import '../styles/globals.scss'
+import "@/styles/globals.scss";
 import Head from "next/head";
 import { AppProps } from "next/app";
-import { useRouter } from 'next/router'
-import Link from 'next/link'
+import { useRouter } from "next/router";
+import Link from "next/link";
 import { ReactElement, useEffect } from "react";
-import styles from '../styles/App.module.css';
-import { trackView } from '../lib/umami';
+import styles from "@/styles/App.module.css";
+import { trackView } from "@/lib/umami";
 
 export default function App({ Component, pageProps }: AppProps): ReactElement {
 	const router = useRouter();
@@ -15,12 +15,12 @@ export default function App({ Component, pageProps }: AppProps): ReactElement {
 			const {
 				location: { pathname, search },
 			} = window;
-			let currentUrl = `${pathname}${search}`;
-			trackView(url, currentUrl)
-		}
-		router.events.on('beforeHistoryChange', handleRouteChange)
-		return () => { router.events.off('beforeHistoryChange', handleRouteChange) }
-	}, [router.events])
+			const currentUrl = `${pathname}${search}`;
+			trackView(url, currentUrl);
+		};
+		router.events.on("beforeHistoryChange", handleRouteChange);
+		return () => { router.events.off("beforeHistoryChange", handleRouteChange); };
+	}, [router.events]);
 
 	return <div className={styles.App}>
 		<Head>
@@ -31,5 +31,5 @@ export default function App({ Component, pageProps }: AppProps): ReactElement {
 		<div className={styles.Content}>
 			<Component {...pageProps} />
 		</div>
-	</div>
+	</div>;
 }

@@ -1,9 +1,9 @@
 import Head from "next/head";
 import Link from "next/link";
 import { ReactElement } from "react";
-import humanDate from "../lib/date";
-import { PostData } from "../lib/getPostData";
-import styles from "../styles/BlogPost.module.css";
+import humanDate from "@/lib/date";
+import { PostData } from "@/lib/getPostData";
+import styles from "@/styles/BlogPost.module.css";
 
 interface BlogProps {
 	children: ReactElement,

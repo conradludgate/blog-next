@@ -1,7 +1,7 @@
-import { PostData } from "./getPostData"
+import { PostData } from "./getPostData";
 
-export async function generateRssItem(post: PostData) {
-    return `
+export async function generateRssItem(post: PostData): Promise<string> {
+	return `
     <item>
       <guid>https://conradludgate.com${post.path}</guid>
       <title>${post.title}</title>
@@ -9,13 +9,13 @@ export async function generateRssItem(post: PostData) {
       <link>https://conradludgate.com${post.path}</link>
       <pubDate>${new Date(post.date).toUTCString()}</pubDate>
     </item>
-`
+`;
 }
 
-export async function generateRss(posts: PostData[]) {
-    const itemsList = await Promise.all(posts.map(generateRssItem))
+export async function generateRss(posts: PostData[]): Promise<string> {
+	const itemsList = await Promise.all(posts.map(generateRssItem));
 
-    return `<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+	return `<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>Conrad Ludgate</title>
@@ -24,7 +24,7 @@ export async function generateRss(posts: PostData[]) {
     <language>en</language>
     <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
     <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
-    ${itemsList.join('')}
+    ${itemsList.join("")}
   </channel>
-</rss>`
+</rss>`;
 }

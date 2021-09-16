@@ -6,6 +6,7 @@ export interface PostData {
 	date: string;
 	tags: string[];
 	desc: string;
+	imageURL?: string;
 }
 
 export default async function getPostData(): Promise<PostData[]> {

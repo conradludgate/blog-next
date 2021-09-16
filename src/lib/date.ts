@@ -11,8 +11,8 @@ const months = [
 	"October",
 	"November",
 	"December",
-]
+];
 export default function humanDate(dateString: string): string {
-	let date = new Date(dateString)
+	const date = new Date(dateString);
 	return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
 }

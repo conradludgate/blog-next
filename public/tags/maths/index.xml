@@ -5,31 +5,15 @@
     <link>https://conradludgate.com/</link>
     <description>Ramblings from Conrad Ludgate</description>
     <language>en</language>
-    <lastBuildDate>Thu, 16 Sep 2021 09:21:43 GMT</lastBuildDate>
+    <lastBuildDate>Thu, 16 Sep 2021 09:21:44 GMT</lastBuildDate>
     <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
     
-    <item>
-      <guid>https://conradludgate.com/posts/next</guid>
-      <title>New blog front end</title>
-      <description>I've decided to rewrite my blogging front end in nextjs</description>
-      <link>https://conradludgate.com/posts/next</link>
-      <pubDate>Wed, 15 Sep 2021 00:00:00 GMT</pubDate>
-    </item>
-
     <item>
       <guid>https://conradludgate.com/posts/fft</guid>
       <title>Fast AF Fourier Transform (FafFT)</title>
       <description>I recently saw these two videos about the discrete fourier transform (DFT) and discovering the fast fourier transform (FFT) and I got re-inspired to experiment with the FFT algorithm again.</description>
       <link>https://conradludgate.com/posts/fft</link>
       <pubDate>Sun, 13 Dec 2020 00:00:00 GMT</pubDate>
-    </item>
-
-    <item>
-      <guid>https://conradludgate.com/posts/yew</guid>
-      <title>Dynamic Stylesheets and Yew</title>
-      <description>I recently discovered a really cool front-end framework written in Rust called Yew.</description>
-      <link>https://conradludgate.com/posts/yew</link>
-      <pubDate>Sun, 12 Apr 2020 00:00:00 GMT</pubDate>
     </item>
 
   </channel>

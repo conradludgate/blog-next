@@ -14,34 +14,20 @@
   column-gap: 1em;
 }
 
-.Post {
+.Tag {
   max-width: 80ch;
   width: 100%;
   border-bottom: 1px solid #d2d2d2;
   padding-bottom: 1.5em;
 }
 
-.Post > a {
+.Tag > a {
   text-decoration: none;
 }
 
-.PostFooter {
+.TagFooter {
   color: #ababab;
 }
-
-.PostFooterTags {
-  margin-left: 0.75em;
-  display: inline;
+.TagFooter time {
+  margin-right: 1em;
 }
-
-.PostFooterTags > a {
-  margin-left: 0.75em;
-  display: inline;
-  color: #ababab;
-  text-decoration: none;
-}
-
-.PostFooterTags > a:hover {
-  color: #909090;
-}
-

@@ -12,6 +12,11 @@ export interface Posts {
 export default function Home({ posts }: Posts) {
 	return (
 		<div className={styles.container}>
+			<div className={styles.Links}>
+				<Link href="/about" prefetch={false}><a>About</a></Link>
+				<Link href="/tags" prefetch={false}><a>Tags</a></Link>
+				<Link href="index.xml" prefetch={false}><a>RSS</a></Link>
+			</div>
 			{posts.map((post: PostData, key: number) =>
 				<Post key={key} {...post} />
 			)}

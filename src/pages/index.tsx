@@ -1,5 +1,6 @@
 import styles from "@/styles/Home.module.css";
 import Link from "next/link";
+import Head from "next/head";
 import { GetStaticProps } from "next";
 import getPostData, { PostData } from "@/lib/getPostData";
 import humanDate from "@/lib/date";
@@ -11,7 +12,13 @@ export interface Posts {
 }
 
 export default function Home({ posts }: Posts): ReactElement {
-	return (
+	return <>
+		<Head>
+			<title>Conrad Ludgate</title>
+			<meta name="description" content="I am Conrad Ludgate, welcome to my blog where I write about code" />
+			<meta property="og:site_name" content="Conrad Ludgate" />
+			<meta property="og:image" content="https://conradludgate.com/android-icon-192x192.png" />
+		</Head>
 		<div className={styles.container}>
 			<div className={styles.Links}>
 				<Link href="/about" prefetch={false}><a>About</a></Link>
@@ -22,7 +29,7 @@ export default function Home({ posts }: Posts): ReactElement {
 				<Post key={key} {...post} />
 			)}
 		</div>
-	);
+	</>;
 }
 
 export function Post({ path, title, date, tags, desc }: PostData): ReactElement {

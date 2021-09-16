@@ -1,5 +1,4 @@
 import "@/styles/globals.scss";
-import Head from "next/head";
 import { AppProps } from "next/app";
 import { useRouter } from "next/router";
 import Link from "next/link";
@@ -23,8 +22,6 @@ export default function App({ Component, pageProps }: AppProps): ReactElement {
 	}, [router.events]);
 
 	return <div className={styles.App}>
-		<Head>
-		</Head>
 		<header>
 			<Link href="/" prefetch={false}><a>Conrad Ludgate</a></Link>
 		</header>

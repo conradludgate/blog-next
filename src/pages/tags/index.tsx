@@ -3,6 +3,7 @@ import { ReactElement } from "react";
 import getPostData from "@/lib/getPostData";
 import styles from "@/styles/Tags.module.css";
 import Link from "next/link";
+import Head from "next/head";
 import humanDate from "@/lib/date";
 
 interface TagPageProps {
@@ -16,7 +17,13 @@ interface TagCount {
 }
 
 export default function TagPage({ tags }: TagPageProps): ReactElement {
-	return (
+	return <>
+		<Head>
+			<title>Tags - Conrad Ludgate</title>
+			<meta name="description" content="I am Conrad Ludgate, welcome to my blog where I write about code" />
+			<meta property="og:title" content="Tags" />
+			<meta property="og:image" content="https://conradludgate.com/android-icon-192x192.png" />
+		</Head>
 		<div className={styles.container}>
 			<div className={styles.Links}>
 				<Link href="/about" prefetch={false}><a>About</a></Link>
@@ -27,7 +34,7 @@ export default function TagPage({ tags }: TagPageProps): ReactElement {
 				<Tag key={key} {...tag} />
 			)}
 		</div>
-	);
+	</>;
 }
 
 export function Tag({ tag, count, latest }: TagCount): ReactElement {

@@ -7,11 +7,11 @@ function post(url: string, data: any) {
 	req.send(JSON.stringify(data));
 }
 
-const website = "bc7baad1-db36-4225-b7c7-ad5edf480238";
-const hostURL = "https://api.conradludgate.com";
+const website = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID;
+const hostURL = process.env.NEXT_PUBLIC_UMAMI_HOST_URL;
 
-function collect(type: "pageview" | "event", params: any, uuid: string) {
-	if (navigator.doNotTrack === "1") return;
+function collect(type: "pageview" | "event", params: any, website: string | undefined) {
+	if (navigator.doNotTrack === "1" || website === undefined) return;
 
 	const {
 		screen: { width, height },
@@ -21,12 +21,11 @@ function collect(type: "pageview" | "event", params: any, uuid: string) {
 	const screen = `${width}x${height}`;
 
 	if (hostname === "localhost") {
-		// console.log(type, params);
 		return;
 	}
 
 	const payload = {
-		website: uuid,
+		website,
 		hostname,
 		screen,
 		language,

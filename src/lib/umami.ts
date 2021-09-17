@@ -1,17 +1,44 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useRouter } from "next/router";
+import { useEffect } from "react";
 
-function post(url: string, data: any) {
-	const req = new XMLHttpRequest();
-	req.open("POST", url, true);
-	req.setRequestHeader("Content-Type", "application/json");
-	req.send(JSON.stringify(data));
+export function useTracking(): void {
+	const router = useRouter();
+	useEffect(() => {
+		trackView();
+		const handleRouteChange = (url: string) => {
+			const {
+				location: { pathname, search },
+			} = window;
+			const currentUrl = `${pathname}${search}`;
+			trackView(url, currentUrl);
+		};
+		router.events.on("beforeHistoryChange", handleRouteChange);
+		return () => { router.events.off("beforeHistoryChange", handleRouteChange); };
+	}, [router.events]);
 }
 
 const website = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID;
 const hostURL = process.env.NEXT_PUBLIC_UMAMI_HOST_URL;
 
-function collect(type: "pageview" | "event", params: any, website: string | undefined) {
-	if (navigator.doNotTrack === "1" || website === undefined) return;
+interface Pageview {
+	type: "pageview",
+	payload: {
+		url: string,
+		referrer: string,
+	},
+}
+
+interface Event {
+	type: "event",
+	payload: {
+		event_type: string,
+		event_value: string,
+		url: string,
+	},
+}
+
+async function collect(body: Pageview | Event, website: string | undefined): Promise<void> {
+	if (localStorage.getItem("umami.disabled") || website === undefined || window.location.hostname !== "conradludgate.com") return;
 
 	const {
 		screen: { width, height },
@@ -20,56 +47,60 @@ function collect(type: "pageview" | "event", params: any, website: string | unde
 	} = window;
 	const screen = `${width}x${height}`;
 
-	if (hostname === "localhost") {
-		return;
-	}
-
+	const type = body.type;
 	const payload = {
 		website,
 		hostname,
 		screen,
 		language,
-		...params,
+		...body.payload,
 	};
 
-	post(
-		`${hostURL}/api/collect`,
-		{
+	await fetch(`${hostURL}/api/collect`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json"
+		},
+		body: JSON.stringify({
 			type,
 			payload,
-		},
-	);
+		})
+	});
 }
 
-export function trackView(url?: string, referrer?: string): void {
+export async function trackView(url?: string, referrer?: string): Promise<void> {
 	const {
 		location: { pathname, search },
 	} = window;
 	const currentUrl = `${pathname}${search}`;
 	const currentRef = document.referrer;
 
-	collect(
-		"pageview",
+	await collect(
 		{
-			url: url || currentUrl,
-			referrer: referrer || currentRef,
+			type: "pageview",
+			payload: {
+				url: url || currentUrl,
+				referrer: referrer || currentRef,
+			}
 		},
 		website,
 	);
 }
 
-export function trackEvent(event_value: string, event_type?: string, url?: string): void {
+export async function trackEvent(event_value: string, event_type?: string, url?: string): Promise<void> {
 	const {
 		location: { pathname, search },
 	} = window;
 	const currentUrl = `${pathname}${search}`;
 
-	collect(
-		"event",
+	await collect(
 		{
-			event_type: event_type || "custom",
-			event_value,
-			url: url || currentUrl,
+			type: "event",
+			payload: {
+				event_type: event_type || "custom",
+				event_value,
+				url: url || currentUrl,
+			}
 		},
 		website,
 	);

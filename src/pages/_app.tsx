@@ -1,10 +1,9 @@
 import "@/styles/globals.scss";
 import { AppProps } from "next/app";
-import { useRouter } from "next/router";
 import Link from "next/link";
-import React, { ReactElement, useEffect } from "react";
+import React, { ReactElement } from "react";
 import styles from "@/styles/App.module.css";
-import { trackView } from "@/lib/umami";
+import { useTracking } from "@/lib/umami";
 import About from "@/layouts/About";
 import BlogPost from "@/layouts/BlogPost";
 import { MDXProvider, MDXProviderComponentsProp } from "@mdx-js/react";
@@ -28,19 +27,7 @@ const components: MDXProviderComponentsProp = {
 };
 
 export default function App({ Component, pageProps }: AppProps): ReactElement {
-	const router = useRouter();
-	useEffect(() => {
-		trackView();
-		const handleRouteChange = (url: string) => {
-			const {
-				location: { pathname, search },
-			} = window;
-			const currentUrl = `${pathname}${search}`;
-			trackView(url, currentUrl);
-		};
-		router.events.on("beforeHistoryChange", handleRouteChange);
-		return () => { router.events.off("beforeHistoryChange", handleRouteChange); };
-	}, [router.events]);
+	useTracking();
 
 	return <div className={styles.App}>
 		<header>

@@ -22,6 +22,7 @@ export default function TagPage({ tags }: TagPageProps): ReactElement {
 			<title>Tags - Conrad Ludgate</title>
 			<meta name="description" content="I am Conrad Ludgate, welcome to my blog where I write about code" />
 			<meta property="og:title" content="Tags" />
+			<meta property="og:site_name" content="Conrad Ludgate" />
 			<meta property="og:image" content="https://conradludgate.com/android-icon-192x192.png" />
 		</Head>
 		<div className={styles.container}>

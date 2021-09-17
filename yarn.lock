@@ -495,6 +495,13 @@
   dependencies:
     "@types/unist" "*"
 
+"@types/mdx-js__react@^1.5.4":
+  version "1.5.4"
+  resolved "https://registry.yarnpkg.com/@types/mdx-js__react/-/mdx-js__react-1.5.4.tgz#75ed343b5a1f56d9518e902d956e1b611da4a297"
+  integrity sha512-hce+Hymj3cEMOma13eQRhpT3mhQrOkN4CAYEwKWB/qj2BiuUrrTpCkOShEERGmLVgDc3nxF4Dc0k7W999EQxnQ==
+  dependencies:
+    "@types/react" "*"
+
 "@types/node@*":
   version "16.9.1"
   resolved "https://registry.npmjs.org/@types/node/-/node-16.9.1.tgz"
@@ -514,6 +521,15 @@
   version "15.7.4"
   resolved "https://registry.npmjs.org/@types/prop-types/-/prop-types-15.7.4.tgz"
   integrity sha512-rZ5drC/jWjrArrS8BR6SIr4cWpW09RNTYt9AMZo3Jwwif+iacXAqgVjm0B0Bv/S1jhDXKHqRVNCbACkJ89RAnQ==
+
+"@types/react@*":
+  version "17.0.21"
+  resolved "https://registry.yarnpkg.com/@types/react/-/react-17.0.21.tgz#069c43177cd419afaab5ce26bb4e9056549f7ea6"
+  integrity sha512-GzzXCpOthOjXvrAUFQwU/svyxu658cwu00Q9ugujS4qc1zXgLFaO0kS2SLOaMWLt2Jik781yuHCWB7UcYdGAeQ==
+  dependencies:
+    "@types/prop-types" "*"
+    "@types/scheduler" "*"
+    csstype "^3.0.2"
 
 "@types/react@^16.9.51":
   version "16.14.15"

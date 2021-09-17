@@ -1,14 +1,25 @@
 import Head from "next/head";
 import Link from "next/link";
-import { ReactElement } from "react";
+import React, { ReactElement } from "react";
 import humanDate from "@/lib/date";
 import { PostData } from "@/lib/getPostData";
 import styles from "@/styles/BlogPost.module.css";
+import { MDXProvider, MDXProviderComponentsProp } from "@mdx-js/react";
+import Heading from "@/components/Heading";
 
 interface BlogProps {
 	children: ReactElement,
 	meta: PostData,
 }
+
+const components: MDXProviderComponentsProp = {
+	h1: (props) => <Heading {...props} type={(props) => <h1 {...props}/>} />,
+	h2: (props) => <Heading {...props} type={(props) => <h2 {...props}/>} />,
+	h3: (props) => <Heading {...props} type={(props) => <h3 {...props}/>} />,
+	h4: (props) => <Heading {...props} type={(props) => <h4 {...props}/>} />,
+	h5: (props) => <Heading {...props} type={(props) => <h5 {...props}/>} />,
+	h6: (props) => <Heading {...props} type={(props) => <h6 {...props}/>} />,
+};
 
 export default function BlogPost({ children, meta }: BlogProps): ReactElement {
 	return <div className={styles.BlogPost}>
@@ -25,7 +36,9 @@ export default function BlogPost({ children, meta }: BlogProps): ReactElement {
 		<div>
 			<h1>{meta.title}</h1>
 			<time>{humanDate(meta.date)}</time>
-			{children}
+			<MDXProvider components={components}>
+				{children}
+			</MDXProvider>
 			<footer className={styles.Footer}>
 				{meta.tags.map((tag, key) =>
 					<Link key={key} href={"/tags/" + tag}><a>#{tag}</a></Link>

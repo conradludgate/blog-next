@@ -2,7 +2,7 @@ import "@/styles/globals.scss";
 import { AppProps } from "next/app";
 import { useRouter } from "next/router";
 import Link from "next/link";
-import { ReactElement, useEffect } from "react";
+import React, { ReactElement, useEffect } from "react";
 import styles from "@/styles/App.module.css";
 import { trackView } from "@/lib/umami";
 

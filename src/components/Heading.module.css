@@ -1,0 +1,8 @@
+.Heading > a {
+    visibility: hidden;
+    text-decoration: none;
+}
+
+.Heading:hover > a {
+    visibility: visible;
+}

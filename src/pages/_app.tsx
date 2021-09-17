@@ -5,6 +5,27 @@ import Link from "next/link";
 import React, { ReactElement, useEffect } from "react";
 import styles from "@/styles/App.module.css";
 import { trackView } from "@/lib/umami";
+import About from "@/layouts/About";
+import BlogPost from "@/layouts/BlogPost";
+import { MDXProvider, MDXProviderComponentsProp } from "@mdx-js/react";
+import Heading from "@/components/Heading";
+
+const components: MDXProviderComponentsProp = {
+	wrapper: (props) => {
+		switch (props.meta.layout) {
+		case "about":
+			return <About {...props} />;
+		default:
+			return <BlogPost {...props} />;
+		}
+	},
+	h1: (props) => <Heading {...props} type={(props) => <h1 {...props} />} />,
+	h2: (props) => <Heading {...props} type={(props) => <h2 {...props} />} />,
+	h3: (props) => <Heading {...props} type={(props) => <h3 {...props} />} />,
+	h4: (props) => <Heading {...props} type={(props) => <h4 {...props} />} />,
+	h5: (props) => <Heading {...props} type={(props) => <h5 {...props} />} />,
+	h6: (props) => <Heading {...props} type={(props) => <h6 {...props} />} />,
+};
 
 export default function App({ Component, pageProps }: AppProps): ReactElement {
 	const router = useRouter();
@@ -26,7 +47,9 @@ export default function App({ Component, pageProps }: AppProps): ReactElement {
 			<Link href="/" prefetch={false}><a>Conrad Ludgate</a></Link>
 		</header>
 		<div className={styles.Content}>
-			<Component {...pageProps} />
+			<MDXProvider components={components}>
+				<Component {...pageProps} />
+			</MDXProvider>
 		</div>
 	</div>;
 }

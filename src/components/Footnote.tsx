@@ -1,5 +1,5 @@
 import styles from "./Footnote.module.css";
-import { ReactElement, ReactChildren, ReactNode } from "react";
+import { ReactElement, ReactNode } from "react";
 
 export interface FootnoteProps {
 	tag: string,

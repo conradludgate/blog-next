@@ -1,13 +1,12 @@
 import styles from "./Heading.module.css";
-import React, { FunctionComponent, ReactElement } from "react";
+import React, { FunctionComponent, ReactElement, ReactNode } from "react";
 
 export interface HeadingProps {
 	id: string,
-	type: FunctionComponent<any>,
+	type: FunctionComponent<{id: string, className: string, children: ReactNode}>,
 	children: ReactElement,
 }
 
 export default function Heading({ id, type: Header, children }: HeadingProps): ReactElement {
-	// console.log({id, type, children});
 	return <Header id={id} className={styles.Heading}>{children} <a href={`#${id}`} aria-hidden>¶</a></Header>;
 }

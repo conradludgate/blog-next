@@ -28,9 +28,14 @@ export default function BlogPost({ children, meta }: BlogProps): ReactElement {
 			<time>{humanDate(meta.date)}</time>
 			{children}
 			<footer className={styles.Footer}>
-				{meta.tags.map((tag, key) =>
-					<Link key={key} href={"/tags/" + tag}><a>#{tag}</a></Link>
-				)}
+				<div className={styles.Tags}>
+					{meta.tags.map((tag, key) =>
+						<Link key={key} href={"/tags/" + tag}><a>#{tag}</a></Link>
+					)}
+				</div>
+				<span>
+					All text <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC-BY-SA</a> &amp; code <a href="https://mit-license.org/">MIT</a>
+				</span>
 			</footer>
 		</div>
 	</div>;

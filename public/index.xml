@@ -5,9 +5,17 @@
     <link>https://conradludgate.com/</link>
     <description>Ramblings from Conrad Ludgate</description>
     <language>en</language>
-    <lastBuildDate>Thu, 16 Sep 2021 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Sun, 08 May 2022 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
     
+    <item>
+      <guid>https://conradludgate.com/posts/async</guid>
+      <title>Let's talk about this async</title>
+      <description>This is a deep dive into the land of async rust. Get a drink, grab a snack, because this is going to be a long one</description>
+      <link>https://conradludgate.com/posts/async</link>
+      <pubDate>Sun, 08 May 2022 00:00:00 GMT</pubDate>
+    </item>
+
     <item>
       <guid>https://conradludgate.com/posts/k8s</guid>
       <title>A tale of deployments</title>

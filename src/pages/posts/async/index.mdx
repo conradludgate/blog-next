@@ -246,6 +246,275 @@ And our async block will build the initial state of our future.
 
 ### Stick a Pin in it
 
-### Iron Man want his `Arc<Reactor>` back
+Ok great! Our async/await can represent out Future types nicely. Maybe they can do more?
+
+```rust
+let x = "foo";
+async {
+    println!("{x}");
+};
+```
+
+Ok awesome! Just like closures, async blocks can capture outside scope.
+We should expect that this `Future` is bound by the lifetime of `x`.
+
+This would be similar to the state machine
+
+```rust
+struct CaptureFuture<'x> {
+    Init {
+        x: &'x str
+    }, // init -> done will print
+    Done,
+}
+```
+
+Ok, let's try something else. This time, maybe even a bit more realistic!
+Let's say we have a `Vec<u8>` and we use an `AsyncRead` (works the same as `Read`, but async!).
+
+```rust
+async {
+    let mut buf = Vec::new();
+
+    let mut reader = TcpStream::new().await; // use your imagination
+
+    let n = reader.read(&mut buf).await.unwrap();
+    //             ^^^^           ^^^^^
+    //               like read      but async :)
+
+    println!("Read {:?}", buf[..n]);
+}
+```
+
+This seems simple enough. Let's apply our magic and try and build this in our
+state machine form.
+
+First, let's disect this `.read()` future. It borrows our buffer mutably,
+as well as the reader, so it must look something like
+
+```rust
+struct Read<'buf, 'read, R> {
+    reader: &'read R
+    buf: &'buf [u8]
+    // more magic stuff here...
+}
+```
+
+Ok, to start with,
+
+```rust
+enum TcpRead {
+    // first, we create our buffer
+    Init {
+        buf: Vec<u8>
+    },
+    // then we create our reader to go along with it
+    Reader {
+        buf: Vec<u8>,
+        reader: TcpStream,
+    },
+    // then we borrow buf and reader while we read...
+    Reading {
+        buf: Vec<u8>,
+        reader: TcpStream,
+        reading: Read<'buf, 'read, TcpStream>,
+    },
+    // then we print and finish
+    Done,
+}
+```
+
+Seems simple enough - wait a minute, what are the `'buf` and `'read` lifetimes here?!
+
+This is a self referential enum! I'm sure this is a criminal offence in Rust, so what do we do here?
+Maybe our async code is the problem? But we _really_ want this to work.
+
+Ok, if we're commiting crimes, why don't we go all in?
+
+So, self-referential data types are fine as long as you don't move them. The references will still point
+to the same place in memory, which is still the data you expect.
+However, if it moves, that's a problem since the pointers will be pointing at garbage data.
+
+Right fine. So we can use unsafe to break our references a bit, make them static or something. We can then use
+
+```rust
+// Safety:
+// Our caller pinky promises to not move our future (and therefore our buf)
+let buf = unsafe {
+    core::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut buf);
+};
+```
+
+That's great, but how do we tell our callers about this behaviour?
+I guess we could make the `poll` method unsafe, but that kinda sucks if
+there's lots of safe behaviours too.
+
+Well, there is another way. What if we could make it unsafe to move the value _at all_?
+
+That's what `Pin` is! `Pin` is a type that's unsafe to construct, unless our type implements
+`Unpin` (an trait that guarantees it's not self-referential), or unless you use the `Box::pin` method to
+pin it in a boxed allocation (since boxed data is guaranteed to not move).
+
+This gives us our final `Future` trait:
+
+```rust
+pub trait Future {
+    type Output;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+    //            ^^^ pinned! our callers have promised not to move us
+}
+```
 
 ### Executor Order 66
+
+Ok, now that we have futures out of the way (sorry, that took a while) we can get to executors.
+
+I showed off a simple executor earlier, let's update it to work with our new updated future trait:
+
+```rust
+fn main() {
+    // We need a executor context now!
+    // We'll see more on this later...
+    let wake = MyExecutorWake::default();
+    let waker = Waker::from(Arc::new(wake));
+    let mut cx = Context::from_waker(&waker);
+
+    // Initialise our future
+    let mut fut = TcpRead::Init { buf: vec![] };
+
+    // Pin the future
+    // Safety: we'll be good and not move it until we stop polling it!
+    let mut fut = unsafe { Pin::new_unchecked(&mut fut) };
+
+    let n = loop {
+        // call poll (as_mut does a reborrow for us so we can poll it again next time)
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(n) => break n,
+            Poll::Pending => println!("value was not ready"),
+        }
+    };
+    // Done!
+    println!("value is ready -> {n:?}");
+}
+```
+
+Ok, so what about spawning more tasks to run along side this one?
+
+Well, I gave a solution earlier! We just keep a list of tasks and loop through them!
+
+```rust
+fn main() {
+    /// snip: let cx = ...;
+
+    // a ring buffer with efficient FIFO operations
+    let mut tasks = VecDeque::new();
+
+    // Pin the future (using box now because our tasks will be moving around :flushed:)
+    let fut = Box::pin(/* fut */);
+
+    // insert our task!
+    tasks.push_back(fut);
+
+    loop {
+        let mut fut = tasks.pop_front().unwrap(); // take the first task
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(_) => break,
+            Poll::Pending => {
+                tasks.push_back(fut); // we need to re-queue our task now!
+            },
+        }
+    };
+}
+```
+
+Now, our `TcpRead` future just needs access to some `spawn()` function that pushes a second
+task into our tasks queue.
+
+Ok, let's extract it into a struct and make it a thread local instead,
+that way we can easily call `spawn()` anywhere in our code stack!
+
+```rust
+// Task alias
+type Task = Pin<Box<dyn Future<Output = ()>>>;
+
+// our executor struct owns our task queue
+#[derive(Default)]
+pub struct Executor {
+    // Using a RefCell because we'll need interior mutability :O
+    queue: RefCell<VecDeque<Task>>
+}
+
+thread_local! {
+    // Our thread local executor. Will be initialised later.
+    // Uses an Rc because it will need multiple owners
+    static EXECUTOR: OnceCell<Rc<Executor>> = OnceCell::new();
+}
+
+/// Spawns a future in our thread-local executor
+pub fn spawn(&self, fut: impl Future<Output = ()>) {
+    EXECUTOR.with(|e| e.get().unwrap().spawn(fut));
+}
+
+impl Executor {
+    /// registers this executor onto the current thread
+    fn register(self: &Rc<Self>) {
+        EXECUTOR.with(|e| e.set(self.clone));
+    }
+
+    pub fn spawn(&self, fut: impl Future<Output = ()>) {
+        self.tasks.borrow_mut().push_back(Box::pin(fut));
+    }
+
+    /// Waits for the future to complete
+    pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
+        self.register(); // we're now in executor land
+
+        // a way to store the output of the future, which will also signal
+        // that we are done
+        let output: Rc<RefCell<Option<F::Output>>> = Rc::new(RefCell::new(None));
+
+        let output2 = Rc::clone(output);
+        self.spawn(async move {
+            let output = fut.await;
+            *output2.borrow_mut() = Some(output); // set out output value
+        });
+
+        // I swear, I'll explain this junk in a little bit!
+        let wake = MyExecutorWake::default();
+        let waker = Waker::from(Arc::new(wake));
+        let mut cx = Context::from_waker(&waker);
+
+        loop {
+            let mut fut = self.tasks.borrow_mut().pop_front().unwrap(); // take the first task
+            if fut.as_mut().poll(&mut cx).is_pending() {
+                self.tasks.borrow_mut().push_back(fut); // we need to re-queue our task now!
+            }
+
+            // exit our loop if we have our final value :)
+            if let Some(output) = output.borrow_mut().take() {
+                break output
+            }
+        }
+    }
+}
+```
+
+This is it! This is a functioning single threaded async executor. Let's run it
+
+```rust
+fn main() {
+    let executor = Executor::default();
+    executor.block_on(start());
+}
+
+async fn start() {
+    // our magic business logic goes here
+    for i in 0..10 {
+        spawn(async move {
+            println!("hello from task {i}");
+        });
+    }
+}
+```
+
+### Iron Man want his `Arc<Reactor>` back

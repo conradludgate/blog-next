@@ -302,7 +302,7 @@ struct Read<'buf, 'read, R> {
 }
 ```
 
-Ok, to start with,
+Ok, now for our actual future
 
 ```rust
 enum TcpRead {
@@ -333,29 +333,31 @@ Maybe our async code is the problem? But we _really_ want this to work.
 
 Ok, if we're commiting crimes, why don't we go all in?
 
-So, self-referential data types are fine as long as you don't move them. The references will still point
+So, self-referential data types are "fine" as long as you don't move them. The references will still point
 to the same place in memory, which is still the data you expect.
 However, if it moves, that's a problem since the pointers will be pointing at garbage data.
 
-Right fine. So we can use unsafe to break our references a bit, make them static or something. We can then use
+Right, okay. So we can use unsafe to break our references a bit, make them static or something.
 
 ```rust
 // Safety:
-// Our caller pinky promises to not move our future (and therefore our buf)
+// Our caller should not move our future (and therefore our buf)
 let buf = unsafe {
     core::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut buf);
 };
 ```
 
-That's great, but how do we tell our callers about this behaviour?
-I guess we could make the `poll` method unsafe, but that kinda sucks if
-there's lots of safe behaviours too.
+That's great, but how do we tell our callers about these safety guarantees?
+I guess we could make the `poll` method unsafe, but that kinda sucks since this
+makes every single future unsafe to call, and removes any flexibility on what
+these safety guarantees are.
 
-Well, there is another way. What if we could make it unsafe to move the value _at all_?
+Well, maybe there is another way?
+What if we could make it unsafe to move the value _at all_ after we call `poll`?
 
-That's what `Pin` is! `Pin` is a type that's unsafe to construct, unless our type implements
-`Unpin` (an trait that guarantees it's not self-referential), or unless you use the `Box::pin` method to
-pin it in a boxed allocation (since boxed data is guaranteed to not move).
+That's what `Pin` is! `Pin` is a type that's unsafe to construct,
+unless our type implements `Unpin` (an trait that guarantees it's not self-referential),
+or unless you use the `Box::pin` method to pin it in a boxed allocation (since boxed data is guaranteed to not move).
 
 This gives us our final `Future` trait:
 

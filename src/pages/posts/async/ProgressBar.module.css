@@ -6,6 +6,7 @@
 }
 
 .ProgressBar_Container {
+    margin-right: 0.5em;
     text-align: right;
     color: rgb(98, 98, 98);
 }
@@ -14,8 +15,4 @@
     border-radius: 0.5em;
     border: 1px solid black;
     height: 1em;
-}
-
-.ProgressBar_Joke {
-    padding: 0.5em;
 }

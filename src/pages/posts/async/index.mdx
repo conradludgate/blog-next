@@ -29,7 +29,7 @@ but neither blocks the other.
 I've already hinted at another mechanism to allow concurrency, threads! Rust allows multithreading, so why do we need async code?
 Well, there's many reasons. Maybe you're writing code on an embedded device that only supports a single threaded operations.
 Maybe you're working in the Linux kernel itself and don't have access to just create threads as you please.
-Maybe you just want more control about what tasks can run and in which order, and to not be at the mercy of your OS schedular.
+Maybe you just want more control about what tasks can run and in which order, and to not be at the mercy of your OS scheduler.
 
 Whatever your reasoning, async rust is general enough to support your needs
 
@@ -37,7 +37,7 @@ Whatever your reasoning, async rust is general enough to support your needs
 
 Before we dive to deep into async runtimes and how the OS handles IO etc, we need to talk about the future (trait).
 
-Futures represent a contract that a value might not be ready immediately, but at a later point in time. Let's take a look at the definition
+Futures represent a contract that a value might not be ready immediately, but at a later point in time. Let's take a look at the definition:
 
 ```rust
 pub trait Future {
@@ -69,7 +69,8 @@ pub enum Poll<T> {
 This is how our contract is upheld. If the future is ready to compute the value,
 calling `poll` will return `Ready`, otherwise it won't, and instead returns `Pending`.
 
-You'll also notice the poll function takes in a mut reference to itself, this means it can make progress on every individual poll function.
+You'll also notice the poll function takes in a mut reference to itself
+which allows it to update its own state so it can make progress.
 All this needs is someone to call that poll function for us.
 
 ## Baby's first Future
@@ -154,7 +155,7 @@ Scheduling multiple tasks together was the original point, so it'll be good if w
 
 Solving this scheduling problem is easy actually, we just need more tasks.
 Then, instead of calling `poll` on the same task over and over, we alternate.
-The problem then becomes now how you interweve those tasks, but how you know
+The problem then becomes how you interweave those tasks, and how you know
 when best to poll a task.
 
 For instance, let's say our future makes a HTTP request but the data is not ready yet.
@@ -163,7 +164,7 @@ There's no point constantly polling our future asking if it's ready, preferably 
 
 ### Time to add some more Context
 
-Let's update our future trait again with one of the parts we removed
+Let's update our future trait again with one of the parts we removed:
 
 ```rust
 pub trait Future3 /* revenge of the context */ {
@@ -175,7 +176,7 @@ pub trait Future3 /* revenge of the context */ {
 
 This context is uhh, what is this? ~~Is this Go?~~
 
-Ok, looking at the docs we see
+Ok, [looking at the docs](https://doc.rust-lang.org/std/task/struct.Context.html) we see
 
 ```rust
 /// The Context of an asynchronous task.
@@ -190,7 +191,7 @@ impl<'a> Context<'a> {
 }
 ```
 
-Ok, so `Context` clearly refers to our task, but it seems this `Waker` thing is more important.
+Ok, so `Context` is related to an async task, but it seems this `Waker` thing is more important.
 
 ```rust
 /// A Waker is a handle for waking up a task by notifying its executor that it is ready to be run.
@@ -211,7 +212,7 @@ call this `wake()` method when data is available to tell the task that it's read
 
 ### Finally, some async
 
-Ok ok, as promised, here is async code in it's full glory.
+Ok ok, as promised, here is async code in its full glory.
 
 ```rust
 async fn my_async() -> usize {
@@ -225,7 +226,7 @@ async fn step1() -> usize {
 ```
 
 This is the same as our `MyFuture` type from earlier,
-but since it's written in a normal looking rust function, it can be easier to reason about.
+but since it's written in a normal looking Rust function, it can be easier to reason about.
 
 We can see here that we await for the value of `step1`, and then we multiply it by 7 and return it.
 
@@ -233,7 +234,7 @@ Everywhere you see this `.await`, you can think of as a place our future state m
 
 Let's desugar a bit (you're already sweet enough)
 
-Our async function is really a regular function that returns a future
+Our async function is really a regular function that returns a future:
 
 ```rust
 fn my_async() -> impl Future<Output = usize> {
@@ -258,7 +259,7 @@ async {
 ```
 
 Ok awesome! Just like closures, async blocks can capture outside scope.
-We should expect that this `Future` is bound by the lifetime of `x`.
+Since it's borrowing `x`, we should probably expect the future to be bound by the lifetime of `x`
 
 This would be similar to the state machine
 
@@ -266,10 +267,28 @@ This would be similar to the state machine
 struct CaptureFuture<'x> {
     Init {
         x: &'x str
-    }, // (init -> done) will print
+    },
     Done,
 }
+
+impl Future for CaptureFuture<'_> {
+    type Output = ();
+
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self {
+            Self::Init { x } => {
+                println!("{x}");
+                *self = Self::Done;
+                Poll::Ready(())
+            }
+            Self::Done => panic!("please stop polling me"),
+        }
+    }
+}
 ```
+
+Note that we could also use `async move {}` (analogous to `move || {}`)
+which would not borrow but instead move the captures inside.
 
 Ok, let's try something else. This time, maybe even a bit more realistic!
 Let's say we have a `Vec<u8>` and we use an `AsyncRead` (works the same as `Read`, but async!).
@@ -291,8 +310,8 @@ async {
 This seems simple enough. Let's apply our magic and try and build this in our
 state machine form.
 
-First, let's disect this `.read()` future. It borrows our buffer mutably,
-as well as the reader, so it must look something like
+First, let's dissect this `.read()` future. It borrows both our buffer and the reader as mutable,
+so its declaration must look something like
 
 ```rust
 struct Read<'buf, 'read, R> {
@@ -327,44 +346,75 @@ enum TcpRead {
 ```
 
 Seems simple enough - wait a minute, what are the `'buf` and `'read` lifetimes here?!
+Hmm, well, we're intending them to borrow from `buf` and `reader` inside the future itself...
+This seems self referential. [Self referential structs are _hard_](https://rust-unofficial.github.io/too-many-lists/fourth.html)
 
-This is a self referential enum! I'm sure this is a criminal offence in Rust, so what do we do here?
-Maybe our async code is the problem? But we _really_ want this to work.
+So where do we go from here? We could use unsafe to break out of this problem. Let's try that!
 
-Ok, if we're commiting crimes, why don't we go all in?
 
-So, self-referential data types are "fine" as long as you don't move them. The references will still point
-to the same place in memory, which is still the data you expect.
-However, if it moves, that's a problem since the pointers will be pointing at garbage data.
 
-Right, okay. So we can use unsafe to break our references a bit, make them static or something.
+Ok, maybe futures are just unsafe, and our async blocks will write the unsafe code for us,
+and our executors will have to deal with that unsafe too?
 
 ```rust
-// Safety:
-// Our caller should not move our future (and therefore our buf)
-let buf = unsafe {
-    core::mem::transmute::<&mut [u8], &'static mut [u8]>(&mut buf);
-};
+enum TcpRead {
+    // ...
+    Reading {
+        buf: Vec<u8>,
+        reader: TcpStream,
+        reading: Read<'static, 'static, TcpStream>, // static borrows!!!
+    },
+    // ...
+}
+
+impl Future for TcpRead {
+    type Output = ();
+    fn poll(&mut self) -> Poll<Self::Output> {
+        match self {
+            // ..
+            Reader { buf, reader } => {
+                // safety: ???
+                unsafe {
+                    // lifetime extension
+                    let buf2 = &mut *(buf as *mut _);
+                    let reader2 = &mut *(reader as *mut _);
+                    let reading = reader2.read(buf2);
+
+                    *self = Reading { buf, reader, reading }
+                }
+                return Poll::Pending;
+            }
+        }
+    }
+}
 ```
 
-That's great, but how do we tell our callers about these safety guarantees?
-I guess we could make the `poll` method unsafe, but that kinda sucks since this
-makes every single future unsafe to call, and removes any flexibility on what
-these safety guarantees are.
+Ok, This is probably a #BadIdea. But what safety issues might we have?
 
-Well, maybe there is another way?
-What if we could make it unsafe to move the value _at all_ after we call `poll`?
+1. So our lifetime extensions are fine as long as they point to valid memory
+2. Our memory is valid as long as `buf`/`reader` do not move
+3. `buf`/`reader` won't move if our `TcpRead` future doesn't move.
 
-That's what `Pin` is! `Pin` is a type that's unsafe to construct,
-unless our type implements `Unpin` (an trait that guarantees it's not self-referential),
-or unless you use the `Box::pin` method to pin it in a boxed allocation (since boxed data is guaranteed to not move).
+So our safety requirements is that `TcpFuture` doesn't move. Got it, cool. Let's slap
+`unsafe` in front of our `poll` method and call it a day?
 
-This gives us our final `Future` trait:
+Not so fast. Instead of making it unsafe to poll future, we just need to make it unsafe to move them.
+Well, all data types in rust can be moved, unless they are being borrowed.
+Borrows can be made at any point, which means they can be discarded while the type is moved,
+so that doesn't help us.
+
+Maybe we can design a borrow that is unsafe to construct? Yeah!
+
+That's where `Pin` comes in! It provides an _unsafe_ `Pin::new_unchecked(pointer)` method that will
+borrow the owned future. It's unsafe to call this function, so any callers should be sure
+that they don't move it if they call it again.
+
+Let's update our future trait again:
 
 ```rust
 pub trait Future {
     type Output;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+    fn poll(self: Pin<&mut Self>) -> Poll<Self::Output>;
     //            ^^^ pinned! our callers have promised not to move us
 }
 ```

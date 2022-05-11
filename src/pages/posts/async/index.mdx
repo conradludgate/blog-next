@@ -1,3 +1,5 @@
+import ProgressBar from "./ProgressBar.tsx";
+
 export const meta = {
     title: "Let's talk about this async",
     date: "2022-05-08",
@@ -16,7 +18,6 @@ to support allowing multiple streams of work to happen at the same time.
 For instance, say you want to make a network request, but while you're communicating with the external service, you want
 to update the web page with a live updating progress bar.
 
-TODO: insert joke about a progress bar while text shows stealing people's cookies, and mining crypto
 <ProgressBar />
 
 One way we can accomplish this in a single threaded setup is by allowing multiplexing.

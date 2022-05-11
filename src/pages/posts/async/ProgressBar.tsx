@@ -21,7 +21,7 @@ export default function ProgressBar(): ReactElement {
 
 	const joke = useMemo(() => {
 		return jokes[Math.floor(Math.random() * jokes.length)];
-	}, [widthInt]);
+	}, [widthInt]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	return (
 		<div className={styles.ProgressBar_Container}>

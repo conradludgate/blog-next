@@ -423,7 +423,7 @@ Ok, This is probably a #BadIdea. But what safety issues might we have?
 2. Our memory is valid as long as `buf`/`reader` do not move
 3. `buf`/`reader` won't move if our `TcpRead` future doesn't move.
 
-So our safety requirements is that `TcpFuture` doesn't move. Got it, cool. Let's slap
+So our safety requirements is that `TcpRead` future doesn't move. Got it, cool. Let's slap
 `unsafe` in front of our `poll` method and call it a day?
 
 Not so fast. Instead of making it unsafe to poll future, we just need to make it unsafe to move them.

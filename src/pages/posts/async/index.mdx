@@ -101,10 +101,10 @@ impl Future2 for MyFuture {
 ```
 
 This is an implementation of our simple Future trait over an enum state machine.
-The state first computes the value of 6 (`1`), moving us into the `Step1` state (`2`).
-On the next call, we'll compute the value of 7*6, where we return ready (`3`).
-The state is set to `Done` by the first line (`4`).
-Calling `poll` on a `Done` future should be a bug so we are free to panic (`5`).
+The state first computes the value of 6 `(1)`, moving us into the `Step1` state `(2)`.
+On the next call, we'll compute the value of 7*6, where we return ready `(3)`.
+The state is set to `Done` by the first line `(4)`.
+Calling `poll` on a `Done` future should be a bug so we are free to panic `(5)`.
 
 Does it work? Let's try it!
 
@@ -113,18 +113,17 @@ fn main() {
     // initialise the future
     let mut fut = MyFuture::Init;
     let n = loop {
+        println!("polling             - {fut:?}")
         // call poll
         match fut.poll() {
-            // if pending, continue the loop
-            Poll::Pending => {
-                println!("value was not ready -> {fut:?}")
-            }
-            // if ready, break the poll loop with our value (no poll after ready, remember?!)
+            // if ready, break the poll loop with our value
             Poll::Ready(n) => break n,
+            // if pending, continue the loop
+            Poll::Pending => println!("value was not ready - {fut:?}"),
         }
     };
     // Done!
-    println!("value is ready -> {n:?}");
+    println!("value is ready - {n:?}");
 }
 ```
 
@@ -133,8 +132,10 @@ fn main() {
     Finished dev [unoptimized + debuginfo] target(s) in 1.28s
      Running `target/debug/playground`
 
-value was not ready -> Step1(6)
-value is ready -> 42
+polling             - Init
+value was not ready - Step1(6)
+polling             - Step1(6)
+value is ready - 42
 ```
 
 Woo! We successfully made a future and polled it to completion
@@ -210,7 +211,7 @@ call this `wake()` method when data is available to tell the task that it's read
 
 ### Finally, some async
 
-Ok ok, as promised, here is async code in it's full glory. Let's re-write our
+Ok ok, as promised, here is async code in it's full glory.
 
 ```rust
 async fn my_async() -> usize {
@@ -226,7 +227,7 @@ async fn step1() -> usize {
 This is the same as our `MyFuture` type from earlier,
 but since it's written in a normal looking rust function, it can be easier to reason about.
 
-We can see here that we await for the value of `step1` (6), and then we multiply it by 7 and return it.
+We can see here that we await for the value of `step1`, and then we multiply it by 7 and return it.
 
 Everywhere you see this `.await`, you can think of as a place our future state machine could return `Pending`.
 
@@ -265,7 +266,7 @@ This would be similar to the state machine
 struct CaptureFuture<'x> {
     Init {
         x: &'x str
-    }, // init -> done will print
+    }, // (init -> done) will print
     Done,
 }
 ```
@@ -295,9 +296,9 @@ as well as the reader, so it must look something like
 
 ```rust
 struct Read<'buf, 'read, R> {
-    reader: &'read R
-    buf: &'buf [u8]
-    // more magic stuff here...
+    reader: &'read mut R
+    buf: &'buf mut [u8]
+    // more stuff here...
 }
 ```
 

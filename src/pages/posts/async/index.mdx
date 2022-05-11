@@ -453,7 +453,7 @@ pub trait Future3 /* Revenge of the Pin */ {
 
 Ok, now that we have futures out of the way (sorry, that took a while) we can get to executors.
 
-I showed off a simple executor earlier, let's update it to work with our new updated future trait:
+I showed off a simple executor earlier, now let's update it to work with our new future trait:
 
 ```rust
 fn main() {
@@ -506,7 +506,7 @@ fn main() {
 Now, our `TcpRead` future just needs access to some `spawn()` function that pushes a second
 task into our tasks queue.
 
-Ok, let's extract it into a struct and make it a thread local instead,
+Ok, let's extract it into a struct and make it a thread local instead -
 that way we can easily call `spawn()` anywhere in our code stack!
 
 ```rust

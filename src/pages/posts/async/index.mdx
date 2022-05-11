@@ -1,11 +1,11 @@
 import ProgressBar from "@/components/ProgressBar.tsx";
 
 export const meta = {
-    title: "Let's talk about this async",
-    date: "2022-05-11",
-    tags: ["async", "rust"],
-    desc: "This is a deep dive into the land of async rust. Get a drink, grab a snack, because this is going to be a long one",
-}
+  title: "Let's talk about this async",
+  date: "2022-05-11",
+  tags: ["async", "rust"],
+  desc: "This is a deep dive into the land of async rust. Get a drink, grab a snack, because this is going to be a long one",
+};
 
 This is a deep dive into the land of async rust. Get a drink, grab a snack, because this is going to be a long one.
 
@@ -130,7 +130,7 @@ impl Future2 for MyFuture {
 
 This is an implementation of our simple Future trait over an enum state machine.
 The state first computes the value of 6 `(1)`, moving us into the `Step1` state `(2)`.
-On the next call, we'll compute the value of 7*6, where we return ready `(3)`.
+On the next call, we'll compute the value of 7\*6, where we return ready `(3)`.
 The state is set to `Done` by the first line `(4)`.
 Calling `poll` on a `Done` future should be a bug so we are free to panic `(5)`.
 
@@ -226,20 +226,19 @@ async {
     //             ^^^^           ^^^^^
     //               like read      but async :)
 
-    println!("Read {:?}", buf[..n]);
+    println!("Read {:?}", &buf[..n]);
 }
 ```
 
-This seems simple enough. Let's apply our magic and try and build this in our
-state machine form.
+This seems simple enough. Let's apply our magic and try and build this by hand.
 
 First, let's dissect this `.read()` future. It borrows both our buffer and the reader as mutable,
 so its declaration must look something like
 
 ```rust
 struct Read<'buf, 'read, R> {
-    reader: &'read mut R
-    buf: &'buf mut [u8]
+    reader: &'read mut R,
+    buf: &'buf mut [u8],
     // more stuff here...
 }
 ```
@@ -268,13 +267,120 @@ enum TcpRead {
 }
 ```
 
-Seems simple enough - wait a minute, what are the `'buf` and `'read` lifetimes here?!
-Hmm, well, we're intending them to borrow from `buf` and `reader` inside the future itself...
-This seems self referential. [Self referential structs are _hard_](https://rust-unofficial.github.io/too-many-lists/fourth.html)
+Seems simple enough
+
+```
+   Compiling playground v0.0.1 (/playground)
+error[E0261]: use of undeclared lifetime name `'buf`
+  --> src/lib.rs:15:23
+   |
+1  | enum TcpRead {
+   |             - help: consider introducing lifetime `'buf` here: `<'buf>`
+...
+15 |         reading: Read<'buf, 'read, TcpStream>,
+   |                       ^^^^ undeclared lifetime
+
+error[E0261]: use of undeclared lifetime name `'read`
+  --> src/lib.rs:15:29
+   |
+1  | enum TcpRead {
+   |             - help: consider introducing lifetime `'read` here: `<'read>`
+...
+15 |         reading: Read<'buf, 'read, TcpStream>,
+   |                             ^^^^^ undeclared lifetime
+
+For more information about this error, try `rustc --explain E0261`.
+error: could not compile `playground` due to 2 previous errors
+```
+
+Oh, we didn't define these lifetimes!
+
+Rust is suggesting we add these lifetimes to our enum... ok!
+
+```diff
+- enum TcpRead {
++ enum TcpRead<'buf, 'read> {
+```
+
+Ok, cool, it compiles.
+
+Let's go ahead and implement our future
+
+```rust
+impl<'buf, 'read> Future2 for TcpRead<'buf, 'read> {
+    type Output = ();
+    fn poll(&mut self) -> Poll<Self::Output> {
+        let this = std::mem::replace(self, Done);
+        let new = match this {
+            Init { buf } => {
+                Reader { buf, reader: TcpStream }
+            }
+            Reader { mut buf, mut reader } => {
+                let reading = reader.read(&mut buf);
+                Reading { buf, reader, reading }
+            }
+            Reading { buf, reader, mut reading } => {
+                match reading.poll() {
+                    Poll::Pending => Reading { buf, reader, reading },
+                    Poll::Ready(n) => {
+                        let n = n.unwrap();
+                        println!("Read {:?}", &buf[..n]);
+                        return Poll::Ready(())
+                    }
+                }
+            }
+            Done => panic!("I'm done already!"),
+        };
+        *self = new;
+        Poll::Pending
+    }
+}
+```
+
+Aaaanndddd
+
+```
+error[E0597]: `buf` does not live long enough
+  --> src/lib.rs:31:43
+   |
+22 | impl<'buf, 'read> Future2 for TcpRead<'buf, 'read> {
+   |      ---- lifetime `'buf` defined here
+...
+31 |                 let reading = reader.read(&mut buf);
+   |                                           ^^^^^^^^ borrowed value does not live long enough
+32 |                 Reading { buf, reader, reading }
+   |                 -------------------------------- assignment requires that `buf` is borrowed for `'buf`
+33 |             }
+   |             - `buf` dropped here while still borrowed
+
+error[E0505]: cannot move out of `buf` because it is borrowed
+  --> src/lib.rs:32:27
+   |
+22 | impl<'buf, 'read> Future2 for TcpRead<'buf, 'read> {
+   |      ---- lifetime `'buf` defined here
+...
+31 |                 let reading = reader.read(&mut buf);
+   |                                           -------- borrow of `buf` occurs here
+32 |                 Reading { buf, reader, reading }
+   |                 ----------^^^-------------------
+   |                 |         |
+   |                 |         move out of `buf` occurs here
+   |                 assignment requires that `buf` is borrowed for `'buf`
+
+Some errors have detailed explanations: E0505, E0597.
+For more information about an error, try `rustc --explain E0505`.
+error: could not compile `playground` due to 4 previous errors
+```
+
+Well, that's a lot of errors. Let's see what they are saying:
+
+> borrow of `buf` occurs here
+> move out of `buf` occurs here
+
+So we are trying to borrow `buf` from outselves. This is classic self-referential data types.
+[Self referential structs are _hard_](https://rust-unofficial.github.io/too-many-lists/fourth.html).
 
 So where do we go from here? We could use unsafe to break out of this problem. Let's try that!
-
-
 
 Ok, maybe futures are just unsafe, and our async blocks will write the unsafe code for us,
 and our executors will have to deal with that unsafe too?
@@ -293,19 +399,18 @@ enum TcpRead {
 impl Future2 for TcpRead {
     type Output = ();
     fn poll(&mut self) -> Poll<Self::Output> {
-        match self {
+        let this = std::mem::replace(self, Done);
+        let new = match this {
             // ..
             Reader { buf, reader } => {
-                // safety: ???
                 unsafe {
                     // lifetime extension
-                    let buf2 = &mut *(buf as *mut _);
-                    let reader2 = &mut *(reader as *mut _);
+                    let buf2: &'static mut [u8] = &mut *(&mut *buf as *mut _);
+                    let reader2: &'static mut TcpStream = &mut *(&mut reader as *mut _);
                     let reading = reader2.read(buf2);
 
-                    *self = Reading { buf, reader, reading }
+                    Reading { buf, reader, reading }
                 }
-                return Poll::Pending;
             }
         }
     }

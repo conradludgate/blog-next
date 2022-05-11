@@ -638,3 +638,141 @@ list is empty now
 
 Currently, there's nothing for our sleep future to register to in order to wake up.
 Let's fix that.
+
+Let's give our executor a 'reactor', which will be reacting to side-effects.
+In this case, our side effect will be time progressing
+
+> time doesn't progress as a result of our code,
+> it's an intrinsic property of the computer,
+> therefore it's an outside effect of the program
+
+```rust
+pub struct TimeEntry {
+    instant: Instant,
+    waker: Waker,
+}
+
+pub struct Timers {
+    // we'll be inserting the entries ordered by time
+    // the earlier times will be at the end
+    queue: Vec<TimeEntry>
+}
+
+impl Timers {
+    pub fn insert(&mut self, instant: Instant, waker: Waker) {
+        // reverse means it sorts with earlier times at the end (faster pop)
+        let index = match self.queue.binary_search_by_key(&Reverse(instant), |e| Reverse(e.instant)) {
+            Ok(index) | Err(index) => index,
+        };
+        let entry = TimeEntry { instant, waker };
+        queue.insert(index, entry);
+    }
+
+    fn pop(&mut self) -> Option<Waker> {
+        // get the next timer
+        let TimeEntry { instant, waker } = self.queue.pop()?;
+        if instant > Instant::now() {
+            // push it back if it's not ready yet
+            self.0.push(TimeEntry { instant, waker });
+            None
+        } else {
+            Some(waker)
+        }
+    }
+}
+
+pub struct Reactor {
+    timers: RefCell<Timers>
+}
+
+impl Reactor {
+    pub fn insert_timer(&self, instant: Instant, waker: Waker) {
+        self.timers.borrow_mut().insert(instant, waker);
+    }
+
+    pub fn tick(&self) {
+        // try get a timer and wake it up
+        if let Some(task) = self.timers.borrow_mut().pop() {
+            task.wake()
+        }
+    }
+}
+```
+
+Now let's give the reactor to our executor
+
+```diff
+pub struct Executor {
+    // Using a RefCell because we'll need interior mutability :O
+    queue: RefCell<VecDeque<Task>>
++   reactor: Reactor,
+}
+```
+
+And now let's update our sleep future to insert into the reactor
+
+```diff
+impl Future for Sleep {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.until > Instant::now() {
++           EXECUTOR.with(|e| e.get().unwrap().reactor.insert_timer(self.until, cx.waker().clone()));
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    }
+}
+```
+
+Finally, we need to make our `block_on` function tick the reactor
+
+```diff
+pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
+    // setup ...
+
+    loop {
++       // tick the reactor, we can be smarted about this, but it works
++       self.reactor.tick();
+
+        // poll our futures ...
+    }
+}
+```
+
+Hooray! And that's basically all there is to making an async runtime.
+
+## Closing thoughts
+
+Phew, that was a lot of text. If you made it this far, great job. I really appreciate it.
+This is my longest blog post _by far_ and I want to thank [Amos (FasterThanLime)](https://fasterthanli.me/)
+for opening my mind into these long form educational blog posts. I hope I have done him proud <3
+
+I also hope I've helped make some of the choices that the `Future` trait made make sense,
+I was confused by a lot of these things in the beginning and I never found a single definitive guide
+for why they are the way they are, and how to use them effectively. This is hoping to filling that gap.
+
+Currently, what we have written in this post is only a single-threaded runtime.
+Making it multi-threaded is a bit more complex and requires an executor per thread,
+and a shared reactor between threads.
+
+There's also the problem of having a queue per executor + a global queue. If you're interested,
+you can read into how [tokio manages their executor schedular](https://tokio.rs/blog/2019-10-scheduler).
+
+The timers are also very naive. [Tokio has another post talking about how they optimise their timers
+for both sub millisecond precision and also multi minute sleeps](https://tokio.rs/blog/2018-03-timers)
+
+I've skipped over IO in this post too, but it can be added using the reactor model too.
+AsyncIO futures would register their IO interests onto the reactor, the reactor would
+poll the OS for events, these would be fed through and wake up the dependant tasks.
+Tokio does exactly this, and created the [mio](https://crates.io/crates/mio) crate for a better
+OS abstraction.
+
+If you want a complete code sample,
+I have published a multi-threaded version of this code:
+https://github.com/conradludgate/what-the-async
+
+Finally, I want to thank all the tokio team/contributors for their early efforts in this space.
+Great code and great blogs, and they have been very helpful in guiding me.
+Also thanks to all those who hang out in the
+[#async channel in the Rust Community Discord Server](https://discord.gg/rust-lang-community)

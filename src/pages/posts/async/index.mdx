@@ -31,13 +31,16 @@ Well, there's many reasons. Maybe you're writing code on an embedded device that
 Maybe you're working in the Linux kernel itself and don't have access to just create threads as you please.
 Maybe you just want more control about what tasks can run and in which order, and to not be at the mercy of your OS scheduler.
 
-Whatever your reasoning, async rust is general enough to support your needs
+Whatever your reasoning, async rust is general enough to support your needs.
 
 ## Back to the Future
 
 Before we dive to deep into async runtimes and how the OS handles IO etc, we need to talk about the future (trait).
+If you're familiar with async/await in JS, you might have seen that it's syntax sugar for the `Promise` class,
+It's similar in Rust, but instead we have the `Future` trait.
 
-Futures represent a contract that a value might not be ready immediately, but at a later point in time. Let's take a look at the definition:
+Futures represent that the value it computes might not be ready immediately,
+but at a later point in time. Let's take a look at the definition:
 
 ```rust
 pub trait Future {
@@ -46,7 +49,8 @@ pub trait Future {
 }
 ```
 
-There's a lot going on here... I don't want to talk about some of this yet, so for now, let's give it a bit of a hair cut...
+There's a lot going on here... I don't want to talk about some of this yet,
+so for now, let's give it a bit of a hair cut...
 
 ```rust
 pub trait Future2 /* eletric boogaloo */ {
@@ -55,9 +59,20 @@ pub trait Future2 /* eletric boogaloo */ {
 }
 ```
 
-Ok, that looks a bit better, but what's this `Poll` thingy?
+This is actually quite similar to another trait that rust has -
+`FnMut` (which is the trait behind a lot of closures).
 
-Well, it's ~~an Option~~ a representation that a future value is either ready, or not ready:
+```rust
+pub trait FnOnce<Args> {
+    type Output;
+    fn call_mut(&mut self, args: Args) -> Self::Output;
+}
+```
+
+We're not defining a function, so we can get rid of the `args`, but it can return a value.
+
+But since a `Future`'s output might not be ready immediately, we can make it return an option-like
+value. One variant indicates that it's `Ready`, and one the other indicates the value is `Pending`.
 
 ```rust
 pub enum Poll<T> {
@@ -66,14 +81,26 @@ pub enum Poll<T> {
 }
 ```
 
-This is how our contract is upheld. If the future is ready to compute the value,
-calling `poll` will return `Ready`, otherwise it won't, and instead returns `Pending`.
+Much like functions can be made of more functions, our futures can be made of more futures:
 
-You'll also notice the poll function takes in a mut reference to itself
-which allows it to update its own state so it can make progress.
-All this needs is someone to call that poll function for us.
+```rust
+async fn foo() {
+    bar().await
+}
+async fn bar() {}
+```
+
+When these are turned into futures, our `foo` future will call `poll()` on `bar`.
+If that returns `Pending`, then `foo` also returns `Pending`.
+If it returns `Ready(())`, then `foo` will attempt to make some progress.
+
+You'll also notice the poll function takes in a mut reference to itself.
+This is how it keeps track of the progress it has made. Each call to poll
+will try to make some progress, and it'll be stored for next time.
 
 ## Baby's first Future
+
+Let's write a future by hand and see how they work
 
 ```rust
 #[derive(Debug)]
@@ -114,17 +141,17 @@ fn main() {
     // initialise the future
     let mut fut = MyFuture::Init;
     let n = loop {
-        println!("polling             - {fut:?}")
+        println!("polling - {fut:?}")
         // call poll
         match fut.poll() {
             // if ready, break the poll loop with our value
             Poll::Ready(n) => break n,
             // if pending, continue the loop
-            Poll::Pending => println!("value was not ready - {fut:?}"),
+            Poll::Pending => println!("pending"),
         }
     };
     // Done!
-    println!("value is ready - {n:?}");
+    println!("ready!  - {n:?}");
 }
 ```
 
@@ -133,74 +160,19 @@ fn main() {
     Finished dev [unoptimized + debuginfo] target(s) in 1.28s
      Running `target/debug/playground`
 
-polling             - Init
-value was not ready - Step1(6)
-polling             - Step1(6)
-value is ready - 42
+polling - Init
+pending
+polling - Step1(6)
+ready!  - 42
 ```
 
 Woo! We successfully made a future and polled it to completion
 
-## Where's the async?
-
-So, 2 problems. This doesn't do what we wanted.
-
-First, where's the async stuff?! I thought this article was about async!
-
-The second problem is that we've only got 1 future being polled.
-The original point was to allow multiple tasks to be run concurrently.
-
-I promise that we'll get back to the async later, but let's solve this second problem.
-Scheduling multiple tasks together was the original point, so it'll be good if we can reason about that.
-
-Solving this scheduling problem is easy actually, we just need more tasks.
-Then, instead of calling `poll` on the same task over and over, we alternate.
-The problem then becomes how you interweave those tasks, and how you know
-when best to poll a task.
-
-For instance, let's say our future makes a HTTP request but the data is not ready yet.
-There's no point constantly polling our future asking if it's ready, preferably it would tell us
-
-## Finally, some async
-
-Ok ok, as promised, here is async code in its full glory.
-
-```rust
-async fn my_async() -> usize {
-    let n = step1().await;
-    7 * n
-}
-
-async fn step1() -> usize {
-    6
-}
-```
-
-This is the same as our `MyFuture` type from earlier,
-but since it's written in a normal looking Rust function, it can be easier to reason about.
-
-We can see here that we await for the value of `step1`, and then we multiply it by 7 and return it.
-
-Everywhere you see this `.await`, you can think of as a place our future state machine could return `Pending`.
-
-Let's desugar a bit (you're already sweet enough)
-
-Our async function is really a regular function that returns a future:
-
-```rust
-fn my_async() -> impl Future<Output = usize> {
-    async {
-        let n = step1().await;
-        7 * n
-    }
-}
-```
-
-And our async block will build the initial state of our future.
-
 ### Stick a Pin in it
 
-Ok great! Our async/await can represent out Future types nicely. Maybe they can do more?
+Ok, so we've seen a little bit of async code and how to write futures by hand. Let's go a bit deeper.
+
+Can we capture?
 
 ```rust
 let x = "foo";
@@ -209,10 +181,10 @@ async {
 };
 ```
 
-Ok awesome! Just like closures, async blocks can capture outside scope.
+Yes! Just like closures, async blocks can capture outside scope.
 Since it's borrowing `x`, we should probably expect the future to be bound by the lifetime of `x`
 
-This would be similar to the state machine
+To see if we understand, let's write this out by hand:
 
 ```rust
 struct CaptureFuture<'x> {
@@ -238,8 +210,8 @@ impl Future2 for CaptureFuture<'_> {
 }
 ```
 
-Note that we could also use `async move {}` (analogous to `move || {}`)
-which would not borrow but instead move the captures inside.
+> Note that we could also use `async move {}` (analogous to `move || {}`)
+> which would not borrow but instead move the captures inside.
 
 Ok, let's try something else. This time, maybe even a bit more realistic!
 Let's say we have a `Vec<u8>` and we use an `AsyncRead` (works the same as `Read`, but async!).
@@ -494,7 +466,7 @@ impl Executor {
 }
 ```
 
-This is it! This is a functioning single threaded async executor. Let's run it
+And that's it! This is a functioning single threaded async executor. Let's try it out!
 
 ```rust
 fn main() {
@@ -504,12 +476,33 @@ fn main() {
 
 async fn start() {
     // our magic business logic goes here
+    println!("start!");
     for i in 0..10 {
         spawn(async move {
             println!("hello from task {i}");
         });
     }
+    println!("spawned 10 tasks!");
 }
+```
+
+```
+   Compiling playground v0.0.1 (/playground)
+    Finished dev [unoptimized + debuginfo] target(s) in 1.28s
+     Running `target/debug/playground`
+
+start!
+spawned 10 tasks!
+hello from task 0
+hello from task 1
+hello from task 2
+hello from task 3
+hello from task 4
+hello from task 5
+hello from task 6
+hello from task 7
+hello from task 8
+hello from task 9
 ```
 
 ## Time to add some more Context

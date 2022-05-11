@@ -63,7 +63,7 @@ This is actually quite similar to another trait that rust has -
 `FnMut` (which is the trait behind a lot of closures).
 
 ```rust
-pub trait FnOnce<Args> {
+pub trait FnMut<Args> {
     type Output;
     fn call_mut(&mut self, args: Args) -> Self::Output;
 }
@@ -869,7 +869,7 @@ Hooray! And that's basically all there is to making an async runtime.
 ## Closing thoughts
 
 Phew, that was a lot of text. If you made it this far, great job. I really appreciate it.
-This is my longest blog post _by far_ and I want to thank [Amos (FasterThanLime)](https://fasterthanli.me/)
+This is my longest blog post _by far_ and I want to thank [Amos (fasterthanlime)](https://fasterthanli.me/)
 for opening my mind into these long form educational blog posts. I hope I have done him proud <3
 
 I also hope I've helped make some of the choices that the `Future` trait made make sense,

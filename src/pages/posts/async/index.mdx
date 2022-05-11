@@ -27,7 +27,7 @@ but neither blocks the other.
 ## I thought this blog post was about Rust...?
 
 I've already hinted at another mechanism to allow concurrency, threads! Rust allows multithreading, so why do we need async code?
-Well, there's many reasons. Maybe you're writing code on an embedded device that only supports a single threaded operations.
+Well, there's many reasons. Maybe you're writing code on an embedded device that only supports single threaded operations.
 Maybe you're working in the Linux kernel itself and don't have access to just create threads as you please.
 Maybe you just want more control about what tasks can run and in which order, and to not be at the mercy of your OS scheduler.
 
@@ -36,7 +36,7 @@ Whatever your reasoning, async rust is general enough to support your needs.
 ## Back to the Future
 
 Before we dive to deep into async runtimes and how the OS handles IO etc, we need to talk about the future (trait).
-If you're familiar with async/await in JS, you might have seen that it's syntax sugar for the `Promise` class,
+If you're familiar with async/await in JS, you might have seen that it's syntax sugar for the `Promise` class.
 It's similar in Rust, but instead we have the `Future` trait.
 
 Futures represent that the value it computes might not be ready immediately,
@@ -166,7 +166,7 @@ polling - Step1(6)
 ready!  - 42
 ```
 
-Woo! We successfully made a future and polled it to completion
+Woo! We successfully made a future and polled it to completion.
 
 ### Stick a Pin in it
 
@@ -377,7 +377,7 @@ Well, that's a lot of errors. Let's see what they are saying:
 > borrow of `buf` occurs here
 > move out of `buf` occurs here
 
-So we are trying to borrow `buf` from outselves. This is classic self-referential data types.
+So we are trying to borrow `buf` from ourselves. This is classic self-referential data types.
 [Self referential structs are _hard_](https://rust-unofficial.github.io/too-many-lists/fourth.html).
 
 So where do we go from here? We could use unsafe to break out of this problem. Let's try that!
@@ -423,7 +423,7 @@ Ok, This is probably a #BadIdea. But what safety issues might we have?
 2. Our memory is valid as long as `buf`/`reader` do not move
 3. `buf`/`reader` won't move if our `TcpRead` future doesn't move.
 
-So our safety requirements is that `TcpRead` future doesn't move. Got it, cool. Let's slap
+So our safety requirement is that `TcpRead` future doesn't move. Got it, cool. Let's slap
 `unsafe` in front of our `poll` method and call it a day?
 
 Not so fast. Instead of making it unsafe to poll future, we just need to make it unsafe to move them.
@@ -856,7 +856,7 @@ pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
     // setup ...
 
     loop {
-+       // tick the reactor, we can be smarted about this, but it works
++       // tick the reactor, we can be smarter about this, but it works
 +       self.reactor.tick();
 
         // poll our futures ...
@@ -881,10 +881,10 @@ Making it multi-threaded is a bit more complex and requires an executor per thre
 and a shared reactor between threads.
 
 There's also the problem of having a queue per executor + a global queue. If you're interested,
-you can read into how [tokio manages their executor schedular](https://tokio.rs/blog/2019-10-scheduler).
+you can read into how [tokio manages their executor scheduler](https://tokio.rs/blog/2019-10-scheduler).
 
 The timers are also very naive. [Tokio has another post talking about how they optimise their timers
-for both sub millisecond precision and also multi minute sleeps](https://tokio.rs/blog/2018-03-timers)
+for both sub millisecond precision and also multi minute sleeps](https://tokio.rs/blog/2018-03-timers).
 
 I've skipped over IO in this post too, but it can be added using the reactor model too.
 AsyncIO futures would register their IO interests onto the reactor, the reactor would
@@ -899,4 +899,4 @@ https://github.com/conradludgate/what-the-async
 Finally, I want to thank all the tokio team/contributors for their early efforts in this space.
 Great code and great blogs, and they have been very helpful in guiding me.
 Also thanks to all those who hang out in the
-[#async channel in the Rust Community Discord Server](https://discord.gg/rust-lang-community)
+[#async channel in the Rust Community Discord Server](https://discord.gg/rust-lang-community).

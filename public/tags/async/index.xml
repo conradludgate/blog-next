@@ -16,21 +16,5 @@
       <pubDate>Wed, 11 May 2022 00:00:00 GMT</pubDate>
     </item>
 
-    <item>
-      <guid>https://conradludgate.com/posts/fft</guid>
-      <title>Fast AF Fourier Transform (FafFT)</title>
-      <description>I recently saw these two videos about the discrete fourier transform (DFT) and discovering the fast fourier transform (FFT) and I got re-inspired to experiment with the FFT algorithm again.</description>
-      <link>https://conradludgate.com/posts/fft</link>
-      <pubDate>Sun, 13 Dec 2020 00:00:00 GMT</pubDate>
-    </item>
-
-    <item>
-      <guid>https://conradludgate.com/posts/yew</guid>
-      <title>Dynamic Stylesheets and Yew</title>
-      <description>I recently discovered a really cool front-end framework written in Rust called Yew.</description>
-      <link>https://conradludgate.com/posts/yew</link>
-      <pubDate>Sun, 12 Apr 2020 00:00:00 GMT</pubDate>
-    </item>
-
   </channel>
 </rss>

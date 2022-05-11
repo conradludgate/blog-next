@@ -155,7 +155,7 @@ fn main() {
 }
 ```
 
-```
+```rust
    Compiling playground v0.0.1 (/playground)
     Finished dev [unoptimized + debuginfo] target(s) in 1.28s
      Running `target/debug/playground`
@@ -269,7 +269,7 @@ enum TcpRead {
 
 Seems simple enough
 
-```
+```rust
    Compiling playground v0.0.1 (/playground)
 error[E0261]: use of undeclared lifetime name `'buf`
   --> src/lib.rs:15:23
@@ -339,7 +339,7 @@ impl<'buf, 'read> Future2 for TcpRead<'buf, 'read> {
 
 Aaaanndddd
 
-```
+```rust
 error[E0597]: `buf` does not live long enough
   --> src/lib.rs:31:43
    |
@@ -591,7 +591,7 @@ async fn start() {
 }
 ```
 
-```
+```rust
    Compiling playground v0.0.1 (/playground)
     Finished dev [unoptimized + debuginfo] target(s) in 1.28s
      Running `target/debug/playground`

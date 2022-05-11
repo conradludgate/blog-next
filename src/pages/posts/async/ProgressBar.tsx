@@ -25,9 +25,7 @@ export default function ProgressBar(): ReactElement {
 
 	return (
 		<div className={styles.ProgressBar_Container}>
-			<span className={styles.ProgressBar_Joke}>
-				{joke}
-			</span>
+			<span>{joke}</span>
 			<div className={styles.ProgressBar}>
 				<div className={styles.ProgressBar_Bar} style={{ width: `${width}%` }}></div>
 			</div>

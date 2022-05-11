@@ -373,12 +373,6 @@ I showed off a simple executor earlier, let's update it to work with our new upd
 
 ```rust
 fn main() {
-    // We need a executor context now!
-    // We'll see more on this later...
-    let wake = MyExecutorWake::default();
-    let waker = Waker::from(Arc::new(wake));
-    let mut cx = Context::from_waker(&waker);
-
     // Initialise our future
     let mut fut = TcpRead::Init { buf: vec![] };
 
@@ -387,6 +381,12 @@ fn main() {
     let mut fut = unsafe { Pin::new_unchecked(&mut fut) };
 
     let n = loop {
+        // We need a task context now!
+        // We'll see more on this later...
+        let wake = MyExecutorWake::default();
+        let waker = Waker::from(Arc::new(wake));
+        let mut cx = Context::from_waker(&waker);
+
         // call poll (as_mut does a reborrow for us so we can poll it again next time)
         match fut.as_mut().poll(&mut cx) {
             Poll::Ready(n) => break n,
@@ -479,13 +479,14 @@ impl Executor {
             *output2.borrow_mut() = Some(output); // set out output value
         });
 
-        // I swear, I'll explain this junk in a little bit!
-        let wake = MyExecutorWake::default();
-        let waker = Waker::from(Arc::new(wake));
-        let mut cx = Context::from_waker(&waker);
-
         loop {
             let mut fut = self.tasks.borrow_mut().pop_front().unwrap(); // take the first task
+
+            // I swear, I'll explain this junk in a little bit!
+            let wake = MyExecutorWake::default();
+            let waker = Waker::from(Arc::new(wake));
+            let mut cx = Context::from_waker(&waker);
+
             if fut.as_mut().poll(&mut cx).is_pending() {
                 self.tasks.borrow_mut().push_back(fut); // we need to re-queue our task now!
             }
@@ -517,4 +518,123 @@ async fn start() {
 }
 ```
 
-### Iron Man want his `Arc<Reactor>` back
+### Gimme the context
+
+You might notice that our executor doesn't do anything interesting yet.
+
+Let's say we want a way to sleep in our async tasks.
+We could just use `std::thread::sleep()` in our task, but that will block
+our whole thread loop. Ideally, our sleep feature would be async aware,
+and would just return Pending whenever it is not ready.
+
+```rust
+struct Sleep {
+    until: Instant,
+}
+
+impl Future for Sleep {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.until > Instant::now() {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    }
+}
+
+pub fn sleep(dur: Duration) -> Sleep {
+    sleep_until(Instant::now() + dur)
+}
+pub fn sleep_until(until: Instant) -> Sleep {
+    Sleep { until }
+}
+```
+
+Cool, this works. It will allow other tasks to work while it's sleeping,
+but if you're paying attention,
+you'll notice that we've turned our efficient `thread::sleep(dur)` into
+
+```rust
+let until = Instant::now() + dur
+while self.until < Instant::now() { }
+```
+
+Busy loops like this are usually not a good idea...
+
+So, we need a way to tell our executor that this sleep is unlikely to make progress.
+Ideally, all tasks would tell the executor that they are ready for more work. This is where
+our Waker comes in.
+
+Currently in our executor `block_on` function, we have
+
+```rust
+if fut.as_mut().poll(&mut cx).is_pending() {
+    self.tasks.borrow_mut().push_back(fut);
+}
+```
+
+Which enqueues the task just as soon as it returns pending. What if we instead got the task
+itself to do this for us.
+
+When our task returns pending, instead of giving it back to the executor queue, we will give
+it to the context. And the task will put the context onto some scheduler that will then
+call the `wake` method, this will remove the task from the context and put it back in the work queue
+
+First, we need our waker:
+
+```rust
+struct TaskWaker {
+    task: RefCell<Option<Task>>,
+}
+
+impl Wake for TaskWaker {
+    fn wake(self: Arc<Self>) {
+        // if we have a task
+        if let Some(task) = self.task.borrow_mut().take() {
+            // place it into our executor queue
+            EXECUTOR.with(|e| {
+                let e = e.get().unwrap();
+                e.tasks.borrow_mut().push_back(fut)
+            });
+        }
+    }
+}
+```
+
+Now, we will construct our task context
+
+```diff
+- let wake = MyExecutorWake::default();
+- let waker = Waker::from(Arc::new(wake));
++ let wake = Arc::new(TaskWaker { task: RefCell::new(None) });
++ let waker = Waker::from(Arc::clone(wake));
+let mut cx = Context::from_waker(&waker);
+```
+
+Finally, we update the task polling to push the task here instead of the main queue
+
+```diff
+if fut.as_mut().poll(&mut cx).is_pending() {
+-   self.tasks.borrow_mut().push_back(fut);
++   // our task is now in charge of scheduling itself!
++   wake.task.borrow_mut().push_back(fut);
+}
+```
+
+Yay! So now we're not wasting cycles polling tasks that aren't ready,
+we should probably add a check in our main loop to not panic if the tasks
+list is empty now
+
+```diff
+- let mut fut = self.tasks.borrow_mut().pop_front().unwrap(); // take the first task
++ let mut fut = match self.tasks.borrow_mut().pop_front() {
++     Some(fut) => fut,
++     None => continue,
++ }
+```
+
+### Iron Man wants his `Arc<Reactor>` back
+
+Currently, there's nothing for our sleep future to register to in order to wake up.
+Let's fix that.

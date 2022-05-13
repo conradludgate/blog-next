@@ -53,7 +53,7 @@ There's a lot going on here... I don't want to talk about some of this yet,
 so for now, let's give it a bit of a hair cut...
 
 ```rust
-pub trait Future2 /* eletric boogaloo */ {
+pub trait Future2 /* electric boogaloo */ {
     type Output;
     fn poll(&mut self) -> Poll<Self::Output>;
 }
@@ -722,7 +722,7 @@ impl Wake for TaskWaker {
             // place it into our executor queue
             EXECUTOR.with(|e| {
                 let e = e.get().unwrap();
-                e.tasks.borrow_mut().push_back(fut)
+                e.tasks.borrow_mut().push_back(task)
             });
         }
     }
@@ -856,7 +856,7 @@ pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
     // setup ...
 
     loop {
-+       // tick the reactor, we can be smarted about this, but it works
++       // tick the reactor, we can be smarter about this, but it works
 +       self.reactor.tick();
 
         // poll our futures ...

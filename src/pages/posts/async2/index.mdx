@@ -1,0 +1,51 @@
+export const meta = {
+  title: "Optimising async runtimes",
+  date: "2022-05-11",
+  tags: ["async", "rust"],
+  desc: "Optimising an async runtime with one too many intrusive linked lists",
+};
+
+Let's optimise our async runtime with one too many intrusive linked lists
+
+> This is a part 2 of our async series. You can read [part one here](async)
+
+## Multi-threaded executor
+
+We left off with a single threaded executor and a simple timer reactor.
+We want _optimal performance_, so let's make it multi-threaded.
+
+First, we should upgrade our `RefCell`s to `Mutex` and our `Rc`s to `Arc`.
+We will keep each executor to be a thread local instance, but it will make use
+of a shared task queue.
+
+Finally, we need our `block_on` method to instantiate a thread pool
+
+## Invading personal space
+
+Locking our global task pool is really slow... We don't expect our futures to take very
+long on their small work loads, so our workflow looks like:
+
+```
+┌──────┬──┬──────┬┬──────────────┬────┬──────┐
+│ work │  │ work ││ lots of work │    │ work │
+└──────┴──┴──────┴┴──────────────┴────┴──────┘
+```
+
+Where the spaces are us acquiring the locks on the task queue. Ideally, it would look more like:
+
+```
+┌──────┬──────┬──────────────┬──────┐
+│ work │ work │ lots of work │ work │
+└──────┴──────┴──────────────┴──────┘
+```
+
+This would be possible if we let our thread local executors have their own individual task queue.
+We can also, remove any lock contentions if we made spawns in those threads push to their local queue too
+(since we know for a fact that it's not in use!)
+
+The only problem is, if we spawn only into our current thread, then none of our other threads will get tasks!
+This is where work stealing comes in.
+
+If our threads have no work available, they can 'ask' their neighbours for some. This means that they
+will take a few tasks from another thread, hopefully while that thread is busy doing some work.
+this will allow each thread share tasks without much overhead.

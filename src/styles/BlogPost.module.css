@@ -15,11 +15,11 @@
 }
 
 .BlogPost blockquote {
+	background-color: rgba(203, 203, 203, 0.2);
+	padding: 0 1.5em;
 	border-left: 4px solid rgb(203, 203, 203);
-	padding-left: 1em;
-	padding-right: 1em;
-	margin-inline-start: 0px;
-	margin-inline-end: 0px;
+	margin-inline-start: 0.5em;
+	margin-inline-end: 0.5em;
 }
 
 .Footer {

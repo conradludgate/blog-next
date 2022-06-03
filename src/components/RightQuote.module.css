@@ -1,0 +1,6 @@
+blockquote.RightQuote {
+	background-color: rgba(203, 203, 203, 0.1);
+	border-right: 4px solid rgb(203, 203, 203);
+    border-left: unset;
+    text-align: right;
+}

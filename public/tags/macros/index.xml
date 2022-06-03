@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Conrad Ludgate</title>
+    <link>https://conradludgate.com/</link>
+    <description>Ramblings from Conrad Ludgate</description>
+    <language>en</language>
+    <lastBuildDate>Fri, 03 Jun 2022 00:00:00 GMT</lastBuildDate>
+    <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
+    
+    <item>
+      <guid>https://conradludgate.com/posts/macros_match</guid>
+      <title>A match made in heaven</title>
+      <description>This is part 1 in my series where I talk about macro design patterns. This one is about overusing match statements</description>
+      <link>https://conradludgate.com/posts/macros_match</link>
+      <pubDate>Fri, 03 Jun 2022 00:00:00 GMT</pubDate>
+    </item>
+
+  </channel>
+</rss>

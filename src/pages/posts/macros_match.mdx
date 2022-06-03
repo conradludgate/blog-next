@@ -1,0 +1,367 @@
+import Rq from "@/components/RightQuote";
+
+export const meta = {
+    title: "A match made in heaven",
+    date: "2022-06-03",
+    tags: ["rust", "macros"],
+    desc: "This is part 1 in my series where I talk about macro design patterns. This one is about overusing match statements",
+    imageURL: "https://conradludgate.com/og-image/containers.jpg",
+};
+
+I've written a lot of macros. I've even written macros professionally.
+If there's one thing I'd have to say about macros is that they're hard to write effectively.
+However, this is my blog, I'm allowed to say as much about macros as I like.
+
+Even if I don't recommend people write them, I'm not stopping any time soon.
+So I'm starting this series documenting some of the design patterns
+that help write effective macros.
+
+> Hey, didn't you steal this title from https://fasterthanli.me/articles/a-rust-match-made-in-hell
+
+<Rq>...</Rq>
+
+Anyway. If, like me, you're naturally curious about how macros work, you might have looked at the `cargo expand`
+of some of the built in derives.
+
+Here's an example
+
+```rust
+#[derive(Debug)]
+struct Account {
+    user: String,
+    money: i32,
+}
+```
+
+(follow along at home on the [playground](https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=337cfa59b540fd767e146fc216967366), using the 'Tools > Expand Macros' feature)
+
+When we `cargo expand` this, we get the following
+
+```rust
+impl ::core::fmt::Debug for Account {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        match *self {
+            Self { user: ref __self_0_0, money: ref __self_0_1 } => {
+                let debug_trait_builder = &mut ::core::fmt::Formatter::debug_struct(f, "Account");
+                let _ = ::core::fmt::DebugStruct::field(debug_trait_builder, "user", &&(*__self_0_0));
+                let _ = ::core::fmt::DebugStruct::field(debug_trait_builder, "money", &&(*__self_0_1));
+                ::core::fmt::DebugStruct::finish(debug_trait_builder)
+            }
+        }
+    }
+}
+```
+
+Hmm. This is a lot of code. And it's a bit of a mess. Ok, let's back up a bit.
+If we implement it manually following the [docs examples](https://doc.rust-lang.org/std/fmt/trait.Debug.html#examples)
+
+```rust
+impl fmt::Debug for Account {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Account")
+            .field("user", &self.user)
+            .field("money", &self.money)
+            .finish()
+    }
+}
+```
+
+This is much cleaner. Why does the derive output have _so much noise_?!
+This code as presented is pretty straight forward to implement a macro for.
+But with simplicity there is always hidden complexity.
+
+## Structs
+
+One of the issues you bump into early on with derive macros is that there's just so many ways to define structs.
+
+```rust
+struct UnitStruct;
+struct TupleStruct(A, B, C);
+struct NamedStruct {
+    a: A,
+    b: B,
+    c: C,
+}
+```
+
+If you're gonna support derives on structs, it usually makes sense to support all 3 forms.
+
+For our `Debug` code, let's look at some idiomatic impls for each of these 3 structs
+
+```rust
+impl fmt::Debug for UnitStruct {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("UnitStruct")
+    }
+}
+impl fmt::Debug for TupleStruct {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_tuple("TupleStruct")
+            .field(&self.0)
+            .field(&self.1)
+            .field(&self.2)
+            .finish()
+    }
+}
+impl fmt::Debug for NamedStruct {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("NamedStruct")
+            .field("a", &self.a)
+            .field("b", &self.b)
+            .field("c", &self.c)
+            .finish()
+    }
+}
+```
+
+Ok, maybe this isn't so bad. We have three different requirements of how we write the impl
+(using `write_str`, `debug_tuple` and `debug_struct` respectively)
+so maybe it makes sense that we need to duplicate our impl code depending
+on what struct form we have been given.
+
+## Enums
+
+In our Rust world, not only do we have structs, we have enums too!
+Each variant of an enum also has 3 forms (equivalent to the struct forms).
+
+```rust
+enum Enum {
+    UnitVariant,
+    TupleVariant(A, B, C),
+    NamedVariant {
+        a: A,
+        b: B,
+        c: C,
+    },
+}
+```
+
+which could have the following `Debug` impl
+
+```rust
+impl fmt::Debug for Enum {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Enum::UnitVariant => f.write_str("UnitVariant"),
+            Enum::TupleVariant(a, b, c) => {
+                f.debug_tuple("TupleVariant")
+                    .field(a)
+                    .field(b)
+                    .field(c)
+                    .finish()
+            },
+            Enum::NamedVariant{a, b, c} => {
+                f.debug_struct("NamedVariant")
+                    .field("a", a)
+                    .field("b", b)
+                    .field("c", c)
+                    .finish()
+            },
+        }
+    }
+}
+```
+
+Hmm. Ok, so the unit variant impl looks identical to the unit struct impl.
+But the `TupleStruct` and `TupleVariant`, also the `NamedStruct` and `NamedVariant` impls look a little different.
+Notice we no longer can use `&self.xxx` in our field args, instead we need to use the values from the match arms.
+
+## Pattern matching
+
+So, a neat thing of rust is that you can use patterns outside of match statements. Take a look at this
+
+```rust
+impl fmt::Debug for NamedStruct {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let NamedStruct { a, b, c } = self;
+        f.debug_struct("NamedStruct")
+            .field("a", a)
+            .field("b", b)
+            .field("c", c)
+            .finish()
+    }
+}
+```
+
+Now, wouldn't you know. This makes our struct impl almost identical to our enum impl!
+
+It's just a shame we still need to use a match statement for the enums and a let pattern for the structs...
+
+Well, what's stopping us from using a match in both cases?
+
+```rust
+impl fmt::Debug for NamedStruct {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            NamedStruct { a, b, c } => {
+                f.debug_struct("NamedStruct")
+                    .field("a", a)
+                    .field("b", b)
+                    .field("c", c)
+                    .finish()
+            }
+        }
+    }
+}
+```
+
+There we go. This is the match design pattern. I'm not sure if it has an official name,
+but I've only learnt of it recently. It's a very nice one.
+
+---
+
+> Umm..
+
+<Rq>Yes?</Rq>
+
+> This isn't what the derive outputs
+
+<Rq>What do you mean?</Rq>
+
+> Look above, the derive had lots of `::core`, `field(debug_trait_builder, ...)` junk everywhere.
+
+<Rq>Oh yeah, right.</Rq>
+
+This is probably worthy of it's own article. Maybe even a book. But for the sake of completeness,
+I'll explain all the differences between what I showed just now, and what you see from the built in derive.
+
+## Match Ergnomics
+
+Rust didn't always have amazing match ergnomics. Back in the early days, you would use `ref` patterns to
+capture a field as a borrow from the match.
+
+```diff
+impl fmt::Debug for NamedStruct {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+-        match self {
+-            NamedStruct { a, b, c } => {
++        match *self {
++            NamedStruct { ref a, ref b, ref c } => {
+        }
+    }
+}
+```
+
+## Colon2 eletric boogaloo
+
+> _sigh_, reusing jokes from the last article
+
+<Rq>So what, not like anyone read that one anyway...</Rq>
+
+One thing you see a lot in derives is the use of fully qualified paths. There's many reasons for this.
+
+First, let's say the user hasn't got `use std::fmt` in their code, but has their own `mod fmt {}`.
+`fmt::Debug` would refer to their module, not ours! This is a problem. To solve this, replace all cases with
+`::std::fmt`. This ensures that the fmt name **must** come from the `std` crate.
+
+```diff
+-impl fmt::Debug for NamedStruct {
+-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++impl ::std::fmt::Debug for NamedStruct {
++    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+    }
+}
+```
+
+## Method call syntax is magic
+
+Rust magically turns all method calls like
+
+```rust
+f.debug_struct("NamedStruct")
+```
+
+into
+
+```rust
+::std::fmt::Formatter::debug_struct(f, "NamedStruct")
+```
+
+In this case, it's guarnateed. But some macros might make use of trait methods.
+These can become ambiguous very quickly. This also has the feature of autoref, which is a very
+powerful tool to be used with case. So it should be avoided in macros if you want to be the most versatile.
+
+```diff
+impl ::std::fmt::Debug for NamedStruct {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        match *self {
+            NamedStruct { ref a, ref b, ref c } => {
+-                f.debug_struct("NamedStruct")
+-                    .field("a", a)
+-                    .field("b", b)
+-                    .field("c", c)
+-                    .finish()
++                let debug_trait_builder = &mut ::std::fmt::Formatter::debug_struct(f, "NamedStruct");
++                ::std::fmt::DebugStruct::field(debug_trait_builder, "a", a);
++                ::std::fmt::DebugStruct::field(debug_trait_builder, "b", b);
++                ::std::fmt::DebugStruct::field(debug_trait_builder, "c", c);
++                ::std::fmt::DebugStruct::finish(debug_trait_builder)
+            }
+        }
+    }
+}
+```
+
+## Identifiers
+
+In the case of our tuple structs. We had to invent identifiers for our fields.
+We conveniently picked `(a, b, c)` but these are kinda arbitrary. Let's just generate numeral based idents
+like `__self_0_0` (this is interpreted as `self > variant 0 > field 0`). For consistency, let's use these for our
+named fields too
+
+```diff
+impl ::std::fmt::Debug for NamedStruct {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        match *self {
+-            NamedStruct { ref a, ref b, ref c } => {
++            NamedStruct { a: ref __self_0_0, b: ref __self_0_1, c: ref __self_0_2 } => {
+                let debug_trait_builder = &mut ::std::fmt::Formatter::debug_struct(f, "NamedStruct");
+-                ::std::fmt::DebugStruct::field(debug_trait_builder, "a", a);
+-                ::std::fmt::DebugStruct::field(debug_trait_builder, "b", b);
+-                ::std::fmt::DebugStruct::field(debug_trait_builder, "c", c);
++                ::std::fmt::DebugStruct::field(debug_trait_builder, "a", __self_0_0);
++                ::std::fmt::DebugStruct::field(debug_trait_builder, "b", __self_0_1);
++                ::std::fmt::DebugStruct::field(debug_trait_builder, "c", __self_0_2);
+                ::std::fmt::DebugStruct::finish(debug_trait_builder)
+            }
+        }
+    }
+}
+```
+
+## no_std
+
+The last change is to support no_std environments. `fmt` is implemented in `core`.
+This means our macro should use the `core` crate for full correctness.
+
+```diff
+-impl ::std::fmt::Debug for NamedStruct {
+-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
++impl ::core::fmt::Debug for NamedStruct {
++    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        match *self {
+            NamedStruct { a: ref __self_0_0, b: ref __self_0_1, c: ref __self_0_2 } => {
+-                let debug_trait_builder = &mut ::std::fmt::Formatter::debug_struct(f, "NamedStruct");
+-                ::std::fmt::DebugStruct::field(debug_trait_builder, "a", __self_0_0);
+-                ::std::fmt::DebugStruct::field(debug_trait_builder, "b", __self_0_1);
+-                ::std::fmt::DebugStruct::field(debug_trait_builder, "c", __self_0_2);
+-                ::std::fmt::DebugStruct::finish(debug_trait_builder)
++                let debug_trait_builder = &mut ::core::fmt::Formatter::debug_struct(f, "NamedStruct");
++                ::core::fmt::DebugStruct::field(debug_trait_builder, "a", __self_0_0);
++                ::core::fmt::DebugStruct::field(debug_trait_builder, "b", __self_0_1);
++                ::core::fmt::DebugStruct::field(debug_trait_builder, "c", __self_0_2);
++                ::core::fmt::DebugStruct::finish(debug_trait_builder)
+            }
+        }
+    }
+}
+```
+
+## That's all folks
+
+The only difference between our final code and the one that the built in macro outputs
+is this `&&(*__self_0_0)` expression. As far as I'm aware, this is useless. `__self_0_0` works fine.
+There are a couple decisions that come to this though. The rustc macro helpers automatically create the
+`__self_0_0` idents for you in the match arms and give you `*__self_0_0` as the expression to use automatically.
+So for the `field` functions where it needs a reference, you need to make it `&*__self_0_0`. The double reference
+seems to be an oversight, but it's not harmful.

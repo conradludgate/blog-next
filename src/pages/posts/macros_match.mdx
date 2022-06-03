@@ -365,5 +365,10 @@ The only difference between our final code and the one that the built in macro o
 is this `&&(*__self_0_0)` expression. As far as I'm aware, this is useless. `__self_0_0` works fine.
 There are a couple decisions that come to this though. The rustc macro helpers automatically create the
 `__self_0_0` idents for you in the match arms and give you `*__self_0_0` as the expression to use automatically.
-So for the `field` functions where it needs a reference, you need to make it `&*__self_0_0`. The double reference
-seems to be an oversight, but it's not harmful.
+So for the `field` functions where it needs a reference, you need to make it `&*__self_0_0`.
+
+"Why the double reference?" you might ask. I thought it was redundant but it turns out that it's used for DST's.
+Specifically, the `field()` method on the debug helpers use `&dyn Debug`. `&DST` can not be `&dyn Debug` by itself,
+but `&&DST` can be, since `&DST: Debug`.
+
+[Thanks for CAD1997 for the tip](https://www.reddit.com/r/rust/comments/v470hz/comment/ib2tun9/?utm_source=share&utm_medium=web2x&context=3)

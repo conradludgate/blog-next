@@ -15,6 +15,9 @@ Even if I don't recommend people write them, I'm not stopping any time soon.
 So I'm starting this series documenting some of the design patterns
 that help write effective macros.
 
+Note. I'm not yet teaching how to implement macros. Just how to design their outputs. Half of the
+challenge with writing macros is deciding what the output code should look like.
+
 > Hey, didn't you steal this title from https://fasterthanli.me/articles/a-rust-match-made-in-hell
 
 <Rq>...</Rq>
@@ -276,7 +279,7 @@ into
 ::std::fmt::Formatter::debug_struct(f, "NamedStruct")
 ```
 
-In this case, it's guarnateed. But some macros might make use of trait methods.
+In this case, it's guaranteed. But some macros might make use of trait methods.
 These can become ambiguous very quickly. This also has the feature of autoref, which is a very
 powerful tool to be used with case. So it should be avoided in macros if you want to be the most versatile.
 

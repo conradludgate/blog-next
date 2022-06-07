@@ -5,12 +5,20 @@
     <link>https://conradludgate.com/</link>
     <description>Ramblings from Conrad Ludgate</description>
     <language>en</language>
-    <lastBuildDate>Fri, 03 Jun 2022 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Tue, 07 Jun 2022 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
     
     <item>
+      <guid>https://conradludgate.com/posts/async-stack</guid>
+      <title>Stacked Futures and why they are impossible</title>
+      <description>This is a part of my series where I explore async rust in depth. This article explores why stack spawned futures are fundamentally unsound</description>
+      <link>https://conradludgate.com/posts/async-stack</link>
+      <pubDate>Tue, 07 Jun 2022 00:00:00 GMT</pubDate>
+    </item>
+
+    <item>
       <guid>https://conradludgate.com/posts/macros_match</guid>
-      <title>A match made in heaven</title>
+      <title>Macro Patterns - A match made in heaven</title>
       <description>This is part 1 in my series where I talk about macro design patterns. This one is about overusing match statements</description>
       <link>https://conradludgate.com/posts/macros_match</link>
       <pubDate>Fri, 03 Jun 2022 00:00:00 GMT</pubDate>

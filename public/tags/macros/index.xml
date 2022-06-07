@@ -10,7 +10,7 @@
     
     <item>
       <guid>https://conradludgate.com/posts/macros_match</guid>
-      <title>A match made in heaven</title>
+      <title>Macro Patterns - A match made in heaven</title>
       <description>This is part 1 in my series where I talk about macro design patterns. This one is about overusing match statements</description>
       <link>https://conradludgate.com/posts/macros_match</link>
       <pubDate>Fri, 03 Jun 2022 00:00:00 GMT</pubDate>

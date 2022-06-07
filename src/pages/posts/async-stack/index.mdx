@@ -1,0 +1,31 @@
+export const meta = {
+  title: "Stacked Futures and why they are impossible",
+  date: "2022-05-11",
+  tags: ["async", "rust"],
+  desc: "This is a part of my series where I explore async rust in depth. This article explores why stack spawned futures are fundamentally unsound",
+  imageURL: "https://conradludgate.com/og-image/ferris.png",
+};
+
+I've met a very disappointing realisation in the last couple days. Stack spawned futures are fundamentally _unsound_.
+
+What does this even mean? And how can I be certain that this can't be sound ever? Let's find out.
+
+## Spawning tasks
+
+Most async runtimes have a concept of 'spawning a task'. This is analogous to spawning a thread,
+and having multiple tasks running concurrently is the entire premise of async programming.
+
+Most runtimes also spawn tasks by first pinning them to the heap.
+[async-std does it](https://docs.rs/async-task/4.2.0/src/async_task/runnable.rs.html#181).
+[tokio does it](https://docs.rs/tokio/1.19.2/src/tokio/runtime/task/core.rs.html#111-131).
+Even I did it in [the last post](https://conradludgate.com/posts/async#executor-order-66) but I didn't explain much why.
+
+I explained that spawning tasks is like spawning threads. Threads are often longer lived than their spawner environment,
+and the same is true for spawning tasks. When you spawn a task, the future has to live _somewhere_,
+and since tasks can live longer than their spawn environment, they must be boxed to remain valid owned memory.
+
+## Scoped tasks
+
+If you've been paying attention, there's a new trend of [scoped threads](https://doc.rust-lang.org/std/thread/fn.scope.html).
+These are threads that **cannot** outlive their environment. Now, these aren't a new concept.
+crossbeam has [an implementation that dates to at least 2017](https://github.com/crossbeam-rs/crossbeam/commit/438532ad48be7ac542f798b548145024919aaaae#diff-3275f1d3b3d727e6c79f846cb4ad31cc91c0b06313b42e0fcbf21f4339e8677bR192-R215)

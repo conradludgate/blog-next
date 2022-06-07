@@ -16,6 +16,7 @@ export default function Home({ posts }: Posts): ReactElement {
 		<Head>
 			<title>Conrad Ludgate</title>
 			<meta name="description" content="I am Conrad Ludgate, welcome to my blog where I write about code" />
+			<meta property="og:description" content="I am Conrad Ludgate, welcome to my blog where I write about code" />
 			<meta property="og:site_name" content="Conrad Ludgate" />
 			<meta property="og:image" content="https://conradludgate.com/android-icon-192x192.png" />
 		</Head>

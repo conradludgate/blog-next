@@ -17,11 +17,12 @@ export default function BlogPost({ children, meta }: BlogProps): ReactElement {
 			<title>{meta.title}</title>
 			<meta name="description" content={meta.desc} />
 			<meta property="og:title" content={meta.title} />
+			<meta property="og:description" content={meta.desc} />
 			<meta property="og:site_name" content="Conrad Ludgate" />
 			<meta property="og:type" content="article" />
 			<meta property="og:article:published_time" content={meta.date} />
 			{meta.tags.map((tag, key) => <meta key={key} property="og:article:tag" content={tag} />)}
-			<meta property="og:image" content={meta.imageURL ?? "https://conradludgate.com/android-icon-192x192.png"} />
+			{meta.imageURL && <meta property="og:image" content={meta.imageURL} />}
 		</Head>
 		<div>
 			<h1>{meta.title}</h1>

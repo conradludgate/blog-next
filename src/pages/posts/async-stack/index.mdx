@@ -29,3 +29,122 @@ and since tasks can live longer than their spawn environment, they must be boxed
 If you've been paying attention, there's a new trend of [scoped threads](https://doc.rust-lang.org/std/thread/fn.scope.html).
 These are threads that **cannot** outlive their environment. Now, these aren't a new concept.
 crossbeam has [an implementation that dates to at least 2017](https://github.com/crossbeam-rs/crossbeam/commit/438532ad48be7ac542f798b548145024919aaaae#diff-3275f1d3b3d727e6c79f846cb4ad31cc91c0b06313b42e0fcbf21f4339e8677bR192-R215)
+
+This raises the question. Why don't the big async runtimes have _scoped tasks_?
+
+Wait, let me back up. What does scoped tasks have to do with stacked spawns?
+
+```rust
+async fn main() {
+  Task::new(handle_request()).in_scope(async {
+    // this runs along side handle_request
+  }).await;
+  // both tasks are guaranteed to finish here
+}
+
+async fn handle_request() {
+  // ...
+}
+```
+
+This is what a scoped future API might look like. A little different from the crossbeam setup but
+this doesn't matter. The core of if is here. We have two futures. One is spawned to a separate task
+and both are guaranteed to run to completion before the task continues.
+
+Since we can be sure that the futures complete before we continue our outer block,
+we cannot touch the variables while the future is using them.
+The same can said about the future itself, so we could theoretically hold the future in the outer stack.
+This saves on allocation and might make our runtime more performant!
+
+## Forget about it
+
+This is a great idea but is fundamentally flawed. Tasks and Threads, while conceptually similar,
+can't be more different when it comes to this.
+
+One thing we need to be sure of is that if the scoped futures drop, then the spawned task is cancelled.
+Let's say we can cancel our tasks in our runtime, then how do we ensure we haven't forgotten to cancel?
+
+```rust
+let task = Task::new(handle_request()).in_scope(async {
+    // this runs along side handle_request
+});
+
+// 1. we haven't awaited the task. the code is free to continue...
+
+forget(task); // 2. don't run drop... doesn't cancel the task
+
+// 3. task is still running, but the data data for it's future is now no longer on this stack. It's 'garbage'.
+// we did this entirely with safe code... This is not good
+```
+
+Right, so what actually changed between the scoped threads and this scoped task API?
+
+Well, with threading, you can block the thread and _know_ for a fact that the code cannot continue outside.
+This is because, well, that thread is blocked and it's data cannot be modified directly.
+
+Unfortunately we just cannot block tasks unless we can guarantee the caller calls `.await`.
+
+## Use a macro!
+
+In desperation, I clutch to my keyboard and decide I'll make the stack spawn methods `unsafe`,
+but I can make a macro that ensures the function is called with `.await` directly. Surely that
+will fix it.
+
+```rust
+macro_rules! spawn {
+  ($task:expr => $fut:expr) => {
+    unsafe {
+      Task::new($task).in_scope($fut).await;
+      //                              ^^^^^ safe because it blocks the parent task :)
+    }
+  }
+}
+```
+
+And so here we are. A safe stack/scope spawn in Rust... wait a minute, didn't I say this was
+impossible?
+
+Yes. And it is.
+
+The trouble is, we've only put a blanket over the problem but haven't solved it.
+
+```rust
+let fut = async {
+  spawn!(handle_request => async {}); // forced to await
+};
+poll_once!(fut); // this polls the future using a dummy context. This is completely safe
+forget(fut); // whoops, we forgot our task handle again :(
+```
+
+At this point, you have to accept defeat and give up. There's no way to do it.
+
+## Block block block
+
+So I lied. It is technically possible. It's just a bit harsh what you need to do.
+Basically, you have to take the same approach as threading and block the current thread.
+It seems very niche the use case for blocking a thread just to run another task in parallel,
+but you can find the scoped spawn implementation in the [async-scoped](https://docs.rs/async-scoped/latest/async_scoped/struct.Scope.html#method.scope_and_block)
+crate.
+
+## Single Threaded Goodness
+
+So there might be an upside to this. As far as I can tell, if you're in a single threaded runtime,
+you probably can find a way to make these requirements work, since the thread that is spawning is the thread that is
+running the task which is the thread that would be 'forgetting' the task. This is all to say you
+can probably 'block' as task without actually blocking the thread. I have not tested this concept yet,
+but I'm very interested to see some alloc free single threaded async runtimes for embedded systems.
+
+## Closing thoughts
+
+It's a real shame that `forget` is safe. It seems that all of our problems stem from not having total control over
+our memory.
+
+Turns out, `forget` used to be unsafe. In fact, the Rust stdlib had an old scoped thread API way before 1.0 which
+relied on drop handlers too, but it turns out that many presumably safe std library methods got the behaviour
+subtly wrong which resulted in a safe forget, and they very hard to fix. This lead to the
+[RFC](https://github.com/rust-lang/rfcs/blob/master/text/1066-safe-mem-forget.md) to make `forget` safe,
+and eventually [implemented](https://github.com/rust-lang/rust/pull/25187).
+
+It would be very interesting to go back 7 years to explore what we did with the language and reflect.
+Maybe we could have made different choices. But it's hard to say whether an unsafe forget really would
+have been better in the long run for the ecosystem.

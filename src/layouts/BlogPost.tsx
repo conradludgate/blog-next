@@ -22,7 +22,7 @@ export default function BlogPost({ children, meta }: BlogProps): ReactElement {
 			<meta property="og:type" content="article" />
 			<meta property="og:article:published_time" content={meta.date} />
 			{meta.tags.map((tag, key) => <meta key={key} property="og:article:tag" content={tag} />)}
-			{meta.imageURL && <meta property="og:image" content={meta.imageURL} />}
+			<meta property="og:image" content={meta.imageURL ?? "https://conradludgate.com/android-icon-192x192.png"} />
 		</Head>
 		<div>
 			<h1>{meta.title}</h1>

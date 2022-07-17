@@ -8,6 +8,7 @@ import About from "@/layouts/About";
 import BlogPost from "@/layouts/BlogPost";
 import { MDXProvider, MDXProviderComponentsProp } from "@mdx-js/react";
 import Heading from "@/components/Heading";
+import Code from "@/components/Code";
 
 const components: MDXProviderComponentsProp = {
 	wrapper: (props) => {
@@ -24,6 +25,7 @@ const components: MDXProviderComponentsProp = {
 	h4: (props) => <Heading {...props} type={(props) => <h4 {...props} />} />,
 	h5: (props) => <Heading {...props} type={(props) => <h5 {...props} />} />,
 	h6: (props) => <Heading {...props} type={(props) => <h6 {...props} />} />,
+	pre: (props) => <Code {...props} />
 };
 
 export default function App({ Component, pageProps }: AppProps): ReactElement {

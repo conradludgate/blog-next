@@ -67,20 +67,17 @@ a {
   box-sizing: border-box;
 }
 
-$languages: ts, tsx, go, rust, mdx, scss, python;
+div.remark-highlight {
+  position: relative;
+}
 
-@each $language in $languages {
-  pre.language-#{$language}::before {
-    content: "#{$language}";
+div.remark-highlight > span {
+  border-radius: 0.5em;
+  padding: 0 0.5em;
 
-    position: absolute;
-    right: 15px;
-    top: 10px;
-    font-size: 0.9em;
-  }
-
-  pre.language-#{$language} {
-    margin-top: 10px;
-    position: relative;
-  }
+  position: absolute;
+  right: 15px;
+  top: -0.75em;
+  font-size: 0.9em;
+  z-index: 1;
 }

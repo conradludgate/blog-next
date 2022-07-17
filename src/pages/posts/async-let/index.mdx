@@ -1,0 +1,275 @@
+export const meta = {
+  title: "async let - A new concurrency primitve?",
+  date: "2022-07-17",
+  tags: ["async", "rust"],
+  desc: "This is an exploration post into a new language feature design I've been thinking about",
+  imageURL: "https://conradludgate.com/og-image/ferris.png",
+};
+
+This post might be a bit all over the place.
+I currently have Covid-19 and the idea that I'm hoping to present is only half baked.
+I'm hoping that I can get these ideas out of my head so that others might work out the
+nitty details for me 🦀
+
+## Corrections
+
+Before I go into any detail about this new feature, I want to first clarify some of the points
+from my [Stacked Futures](/posts/async-stack) post.
+
+I regret this title now. I should have called it 'Scoped Spawning',
+which was one idea I had about introducing more
+[Structured Concurrency](https://en.wikipedia.org/wiki/Structured_concurrency) features to async Rust.
+
+As many pointed out in later discussions,
+async Rust definitely already has some structured concurrency in the form of
+[`join`](https://doc.rust-lang.org/std/future/macro.join.html) or the more dynamic
+[`FuturesUnordered`](https://docs.rs/futures/0.3.21/futures/stream/struct.FuturesUnordered.html) from the futures crate.
+
+These are very powerful tools and allow structured concurrency today, but they don't make full use
+of the current executor. For instance, if I place two futures in a join,
+they are forced to run on the same task. That is, we have concurrency but no parallelism.
+With my post, I was trying to determine a way to get structured concurrency through spawning
+top level tasks - while not needing any new allocations.
+
+## Async let
+
+With that out of the way, I am focusing more atttention now to the structured concurrency
+techniques we have available today - e.g. the `join` I mentioned above.
+
+Let's start with an example. We want to make 2 http requests which are completely independent.
+
+```rust
+let resp1 = client.make_http_request(1).await;
+let resp2 = client.make_http_request(2).await;
+```
+
+This works, but is wasteful.
+async/await lets you model asynchronous operations as synchronous functions, but this is misleading.
+These two HTTP requests still occur one after the other.
+
+How we can fix this today? Well, we could spawn a new task in our runtime, but assuming we can't
+share our client as `'static`, that's not always possible.
+
+```rust
+use futures::future::join; // joins 2 futures together, returning a new future
+
+// these two http requests will run concurrently and not block each other.
+let (resp1, resp2) = join(
+    async { client.make_http_request(1).await },
+    async { client.make_http_request(2).await },
+).await;
+```
+
+This works fine, but it's really reminding me of some of the hacks we used to do
+in Rust [pre-NLL](https://github.com/rust-lang/rfcs/blob/master/text/2094-nll.md#problem-case-1-references-assigned-into-a-variable).
+It used to be common to create a separate scope for your references such that they would be dropped at the end of the scope and not overlap
+with future use.
+
+Similarly, we've been forced here to make a new scoped block for our futures to run in. We aren't
+free to start futures and await them where-ever we please.
+
+It would be really nice if we could tell Rust that both of these HTTP requests are independent without
+having to break out of our current block. Something like a non-lexical-async feature.
+
+## Introducing async-let
+
+> !!! This is an experimental idea. I can't take full credit for it,
+> but the way I'm presenting is how I imagined it would work based on
+> a brief [thread on zulip](https://rust-lang.zulipchat.com/#narrow/stream/187312-wg-async/topic/join.2Fselect.20and.20executors).
+> I've actively avoided any prior art on this as I hoped for these ideas to be fresh.
+
+Async-let is how I would imagine a non-lexical structured concurrency to take place.
+
+```rust
+async let req1 = client.make_http_request(1); // -------------+ req 1 is started here
+                                              //              |
+async let req2 = client.make_http_request(2); // --+          | req 2 is started here
+                                              //   |          |
+let resp1 = req1.await; // ------------------------|----------+ req 1 ends here
+                                              //   |
+let resp2 = req2.await; // ------------------------+            req 2 ends here
+```
+
+How does this work? First, we need to see how async/await works currently.
+
+> A lot of the desugaring I will be covering is described and featured in my nightly crate [jenner](https://github.com/conradludgate/jenner).
+
+First, `async {}` turns into a [`Generator`](https://doc.rust-lang.org/core/ops/trait.Generator.html).
+Every time you encounter an `$expr.await`, this is desugared into a poll-loop that yields when
+the poll returns pending:
+
+```rust
+{
+    // turn this expression into a future
+    let mut fut = IntoFuture::into_future($expr);
+    // pin the future (safe because the generator it exists within must be pinned too)
+    let mut pinned = unsafe { Pin::new_unchecked(&mut fut) };
+    loop {
+        // poll the future
+        match pinned.as_mut().poll(&mut *cx) {
+            // break from the loop if we are finished
+            Poll::Ready(r) => break r,
+            // yield from the generator if we are not ready to progress yet
+            Poll::Pending => {
+                cx = yield Poll::Pending,
+            }
+        }
+    }
+}
+```
+
+That's basically all you need to know. The way the generators work underneath are quite complicated
+so I won't be covering it. It's not necessary for this async-let concept though.
+
+What `async let` tells this desugaring is that before any yields, we should first also poll
+any 'registered' non-lexical async scopes.
+
+Written another way, any `.await`s in between
+
+```rust
+async let req2 = /* ... */;
+// ...
+let resp2 = req2.await;
+```
+
+will also poll our `req2` future.
+This allows our async requests to effectively happen in the background.
+
+## The fine print
+
+```rust
+async let req1 = client.make_http_request(1);
+```
+
+desugars into
+
+```rust
+let mut req1 = MaybeDone::new(IntoFuture::into_future($expr));
+let mut req1 = unsafe { Pin::new_unchecked(&mut req1) };
+```
+
+> [`MaybeDone`](https://github.com/rust-lang/rust/blob/967a9c94b34bb8f394db03b1d205831eddf6f589/library/core/src/future/join.rs#L148-L158)
+is a type that allows us to reliably poll a future without worrying about when it might complete.
+
+Whenever there's an `$expr.await` within the lifetime of an async-let, then that would instead be turned into
+
+```diff
+{
+    // turn this expression into a future
+    let mut fut = IntoFuture::into_future($expr);
+    // pin the future (safe because the generator it exists within must be pinned too)
+    let mut pinned = unsafe { Pin::new_unchecked(&mut fut) };
+    loop {
++       {
++           // Poll our background futures.
++           // We don't care about it's ready state.
++           let _ = req1.as_mut().poll(&mut *cx);
++       }
+        // poll the future
+        match pinned.as_mut().poll(&mut *cx) {
+            // break from the loop if we are finished
+            Poll::Ready(r) => break r,
+            // yield from the generator if we are not ready to progress yet
+            Poll::Pending => {
+                cx = yield Poll::Pending,
+            }
+        }
+    }
+}
+```
+
+This can scale up for however many async-lets are defined in the current scope.
+
+Finally, when you have `req1.await`, this would desugar as
+
+```rust
+loop {
+    // poll other registered background futures here if any
+
+    // poll the future
+    match req1.as_mut().poll(&mut *cx) {
+        // break from the loop if we are finished
+        Poll::Ready(r) => break req1.take_output().unwrap(),
+        // yield from the generator if we are not ready to progress yet
+        Poll::Pending => {
+            cx = yield Poll::Pending,
+        }
+    }
+}
+```
+
+## try-async-let
+
+If you're familiar with more complicated concurrency primitives. You'll know that
+`join` is only one of many. Another primitive that rust libraries provide is `select`.
+
+This polls multiple futures until only a single future is complete (this is known as race concurrency).
+I've not got a full proposal built for something like that, but I have something close.
+
+We can extend our async-let from being special syntax for `join`,
+and have `try async let` be a `try_join` (another race concurrency primitive).
+
+Here's an example, let's say we want to add a deadline to our http requests.
+
+```rust
+// try block allows scoping `?` behaviour
+try {
+    // `try await` is like `async let` where this future runs in the background.
+    // however, if it completes before it's dropped, and it's value is an error,
+    // then we exit early.
+    try async let deadline = async {
+        sleep(Duration::from_ms(100)).await;
+        Err(DeadlineExceeded)
+    };
+
+    async let req1 = client.make_http_request(1);
+    async let req2 = client.make_http_request(2);
+    let resp1 = req1.await;
+    let resp2 = req2.await;
+
+    // Don't bother to await `deadline`. We want to continue instantly if we succeed
+    (resp1, resp2)
+}
+```
+
+We can even improve our http requests too, since we might expect network errors.
+We might know we want to fail early if a single http request fails too,
+we why don't we make those `try` as well
+
+```rust
+try {
+    // this allow us to exit early in the event that we have network errors
+    try async let req1 = client.make_http_request(1);
+    try async let req2 = client.make_http_request(2);
+    let resp1 = req1.await?;
+    let resp2 = req2.await?;
+
+    (resp1, resp2)
+}
+```
+
+We can even use this for more than just errors by (ab)using the [Try trait](https://doc.rust-lang.org/std/ops/trait.Try.html).
+
+```rust
+try {
+    enum Either<L, R> { Left(L), Right(R) }
+    impl<L, R> Try for Either<L, R> {
+        type Output = L;
+        type Residual = Either<!, R>;
+        /* ... */
+    }
+
+    async let req1 = client.make_http_request(1);
+
+    // `Right` is our 'residual' so it would exit early if req2
+    // completes first
+    try async let req2 = async {
+        Either::Right(client.make_http_request(2).await)
+    };
+
+    req1.await
+    // if req1 compeletes first, we do not await req2.
+}
+```
+
+This allows us to emulate the `select` race behaviour I mentioned above, all using `try async let`.

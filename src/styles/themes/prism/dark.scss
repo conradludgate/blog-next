@@ -45,6 +45,11 @@ pre[class*="language-"] {
   overflow: auto;
   background: #282c34;
 }
+div[class="remark-highlight"] > span {
+  box-shadow: 0 0 5px #282c34;
+  background: #282c34;
+  color: #B0B7C3;
+}
 :not(pre) > code[class*="language-"] {
   padding: .1em .3em;
   border-radius: .3em;

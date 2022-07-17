@@ -10,7 +10,6 @@ interface BlogProps {
 	meta: PostData,
 }
 
-
 export default function BlogPost({ children, meta }: BlogProps): ReactElement {
 	return <div className={styles.BlogPost}>
 		<Head>

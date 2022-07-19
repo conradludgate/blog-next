@@ -1,6 +1,8 @@
 @mixin dark-theme {
 	--color-bg: black;
 	--color-fg: white;
+	--color-bg-secondary: #222222;
+	--color-fg-secondary: white;
 }
 
 [data-theme='dark'] {

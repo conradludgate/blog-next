@@ -16,3 +16,9 @@
     border: 1px solid black;
     height: 1em;
 }
+
+@media (prefers-reduced-motion) {
+    .ProgressBar {
+        display: none;
+    }
+}

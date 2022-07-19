@@ -1,6 +1,8 @@
 @mixin light-theme {
 	--color-bg: white;
 	--color-fg: #5f5f5f;
+	--color-bg-secondary: #eeeeee;
+	--color-fg-secondary: #5f5f5f;
 }
 
 :root {

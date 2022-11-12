@@ -1,0 +1,82 @@
+export const meta = {
+  title: "Over-optimising concurrency primtives",
+  date: "2022-11-06",
+  tags: ["async", "rust", "concurrency"],
+  desc: "Diving into the deep of a common concurrency primitive, optimising it and removing over a million allocations!",
+  imageURL: "https://conradludgate.com/og-image/ferris.png",
+  draft: true,
+};
+
+To quote a [former colleague of mine](https://alexheretic.github.io/)
+> To rust devs; heap allocation is like eye contact on the tube. We like to avoid it if possible.
+
+This resonates with me a lot - not only am I a regular user of the [Tube](https://tfl.gov.uk/modes/tube/), where avoiding eye contact is a must - 
+but I have a personal habit of removing allocations from my code. In the beginning, I would sacrifice ergonomics to achieve this goal, but now
+I have matured a little in my Rust abilities and I know that ergonomics are usually more important. However, I get a real rush when I find a way
+to have my cake and eat it to - that is, remove many allocations while staying performant and feature very few changes to a public API surface.
+
+This post will explore my adventures optimising the async concurrency primitive [`futures::stream::FuturesUnordered`](https://docs.rs/futures/0.3.25/futures/stream/struct.FuturesUnordered.html).
+
+## futures-buffered
+
+I'm happy to introduce my newest crate, [futures-buffered](https://docs.rs/futures-buffered/latest/futures_buffered/index.html). This features a complete rewrite of
+`FuturesUnordered` to use a bounded internal data structure, and achieves a **6% performance boost**, while also removing **over a million**<sup>†</sup> allocation calls :D
+
+This is not without sacrifices, however. As the name suggests, my version is 'bounded' - this means that it has a fixed amount of futures it can process at any one time.
+I think for a lot of usecases, this tradeoff is acceptible. For the purposes of web development, you want to have some kind of load-shedding if the in flight processes
+increases too much - this is a perfect use for a bounded concurrent data structure.
+
+> † The benchmark runs through 512000 total futures. In `FuturesUnordered`, it needs 1 allocation per future. On the other hand, `FuturesUnorderedBounded` needs 4 allocations _total_.
+
+## What is this primitive
+
+Rust implements asynchronous functions using [`Future`s](https://doc.rust-lang.org/std/future/trait.Future.html). These feature a `poll` function
+which will progess the total state forward a small amount, before yielding control of the thread so another future can run in it's place.
+
+This works great for IO bound applications where a single thread can call
+
+```futures
+  Thread   Descriptions
++--------+----------------------------------+
+|        |                                  |
+| Task 1 | Task 1 is started                |
+|        |                                  |
++--------+----------------------------------+
+|        | Task 1 is busy with some         |
+| Task 2 | network device. Yielding control |
+|        | to Task 2                        |
++--------+----------------------------------+
+|        | Task 2 is also busy. The thread  |
+|        | will sleep until it can continue |
++--------+----------------------------------+
+|        | The network IO has finished for  |
+| Task 2 | Task 2, and the work is done     |
+|        |                                  |
++--------+----------------------------------+
+|        |                                  |
+| Task 1 | Same for Task 1                  |
+|        |                                  |
++--------+----------------------------------+
+```
+
+Usually, the responsibility for this scheduling is down to your runtim (like [tokio](https://tokio.rs/)) - but the nice thing about Rust is that usually can have more control.
+`FuturesUnordered` is one such way. You can push a bunch of futures into the set, and poll the whole set. This will progress each and every future,
+returning the results for every future that completes.
+
+You could imagine this being useful on the receiving end of a message queue. If there's a new message, create the future and push it into the collection.
+If the queue has no messages ready, poll the collection to progress the tasks
+
+```rust
+let mut set = FuturesUnordered::new();
+tokio::select! {
+    message = queue.next() => {
+        set.push(process(message));
+    }
+    result = set.next() => {
+        println!("task complete: {result}");
+    }
+}
+```
+
+## How does this currently work?
+

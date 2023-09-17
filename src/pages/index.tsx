@@ -22,9 +22,9 @@ export default function Home({ posts }: Posts): ReactElement {
 		</Head>
 		<div className={styles.container}>
 			<div className={styles.Links}>
-				<Link href="/about" prefetch={false}><a>About</a></Link>
-				<Link href="/tags" prefetch={false}><a>Tags</a></Link>
-				<Link href="index.xml" prefetch={false}><a>RSS</a></Link>
+				<Link href="/about" prefetch={false}>About</Link>
+				<Link href="/tags" prefetch={false}>Tags</Link>
+				<Link href="index.xml" prefetch={false}>RSS</Link>
 			</div>
 			{posts.map((post: PostData, key: number) =>
 				<Post key={key} {...post} />
@@ -34,22 +34,24 @@ export default function Home({ posts }: Posts): ReactElement {
 }
 
 export function Post({ path, title, date, tags, desc }: PostData): ReactElement {
-	return <div className={styles.Post}>
-		<Link prefetch={false} href={path}>
-			<a>
-				<h2>{title}</h2>
-				<p>{desc}</p>
-				<div className={styles.PostFooter}>
-					<time>{humanDate(date)}</time>
-					<div className={styles.PostFooterTags}>
-						{tags.map((tag, key) =>
-							<Link prefetch={false} key={key} href={"/tags/" + tag}><a>#{tag}</a></Link>
-						)}
-					</div>
+	return (
+		<div className={styles.Post}>
+			<Link prefetch={false} href={path}>
+				<>
+					<h2>{title}</h2>
+					<p>{desc}</p>
+				</>
+			</Link>
+			<div className={styles.PostFooter}>
+				<time>{humanDate(date)}</time>
+				<div className={styles.PostFooterTags}>
+					{tags.map((tag, key) =>
+						<Link prefetch={false} key={key} href={"/tags/" + tag}>{`#${tag}`}</Link>
+					)}
 				</div>
-			</a>
-		</Link>
-	</div>;
+			</div>
+		</div>
+	);
 }
 
 export const getStaticProps: GetStaticProps = async () => {

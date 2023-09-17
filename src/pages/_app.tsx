@@ -12,7 +12,6 @@ import Code from "@/components/Code";
 
 const components: MDXProviderComponentsProp = {
 	wrapper: (props) => {
-		console.log(props);
 		switch (props.meta.layout) {
 		case "about":
 			return <About {...props} />;
@@ -32,14 +31,16 @@ const components: MDXProviderComponentsProp = {
 export default function App({ Component, pageProps }: AppProps): ReactElement {
 	useTracking();
 
-	return <div className={styles.App}>
-		<header>
-			<Link href="/" prefetch={false}><a>Conrad Ludgate</a></Link>
-		</header>
-		<div className={styles.Content}>
-			<MDXProvider components={components}>
-				<Component {...pageProps} />
-			</MDXProvider>
+	return (
+		<div className={styles.App}>
+			<header>
+				<Link href="/" prefetch={false}>Conrad Ludgate</Link>
+			</header>
+			<div className={styles.Content}>
+				<MDXProvider components={components}>
+					<Component {...pageProps} />
+				</MDXProvider>
+			</div>
 		</div>
-	</div>;
+	);
 }

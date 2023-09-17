@@ -27,9 +27,9 @@ export default function TagPage({ tags }: TagPageProps): ReactElement {
 		</Head>
 		<div className={styles.container}>
 			<div className={styles.Links}>
-				<Link href="/about" prefetch={false}><a>About</a></Link>
-				<Link href="/tags" prefetch={false}><a>Tags</a></Link>
-				<Link href="/index.xml" prefetch={false}><a>RSS</a></Link>
+				<Link href="/about" prefetch={false}>About</Link>
+				<Link href="/tags" prefetch={false}>Tags</Link>
+				<Link href="/index.xml" prefetch={false}>RSS</Link>
 			</div>
 			{tags.map((tag: TagCount, key: number) =>
 				<Tag key={key} {...tag} />
@@ -39,17 +39,19 @@ export default function TagPage({ tags }: TagPageProps): ReactElement {
 }
 
 export function Tag({ tag, count, latest }: TagCount): ReactElement {
-	return <div className={styles.Tag}>
-		<Link prefetch={false} href={`/tags/${tag}`}>
-			<a>
-				<h2>#{tag}</h2>
-				<div className={styles.TagFooter}>
-					<time>{humanDate(latest)}</time>
-					<span>{count} {count == 1 ? "post" : "posts"}</span>
-				</div>
-			</a>
-		</Link>
-	</div>;
+	return (
+		<div className={styles.Tag}>
+			<Link prefetch={false} href={`/tags/${tag}`}>
+				<>
+					<h2>#{tag}</h2>
+					<div className={styles.TagFooter}>
+						<time>{humanDate(latest)}</time>
+						<span>{count} {count == 1 ? "post" : "posts"}</span>
+					</div>
+				</>
+			</Link>
+		</div>
+	);
 }
 
 export const getStaticProps: GetStaticProps = async () => {

@@ -24,9 +24,9 @@ export default function TagPage({ tag, posts }: TaggedPosts): ReactElement {
 		</Head>
 		<div className={styles.container}>
 			<div className={styles.Links}>
-				<Link href="/about" prefetch={false}><a>About</a></Link>
-				<Link href="/tags" prefetch={false}><a>Tags</a></Link>
-				<Link href={`/tags/${tag}/index.xml`} prefetch={false}><a>RSS</a></Link>
+				<Link href="/about" prefetch={false}>About</Link>
+				<Link href="/tags" prefetch={false}>Tags</Link>
+				<Link href={`/tags/${tag}/index.xml`} prefetch={false}>RSS</Link>
 			</div>
 			{posts.map((post, key) =>
 				<Post key={key} {...post} tags={[]} />

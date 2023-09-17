@@ -12,6 +12,7 @@ import Code from "@/components/Code";
 
 const components: MDXProviderComponentsProp = {
 	wrapper: (props) => {
+		console.log(props);
 		switch (props.meta.layout) {
 		case "about":
 			return <About {...props} />;

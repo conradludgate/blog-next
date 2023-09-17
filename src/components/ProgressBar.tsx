@@ -20,8 +20,8 @@ export default function ProgressBar(): ReactElement {
 	}, [counter, setWidthInt]);
 
 	const joke = useMemo(() => {
-		return jokes[Math.floor(Math.random() * jokes.length)];
-	}, [widthInt]); // eslint-disable-line react-hooks/exhaustive-deps
+		return jokes[hash(widthInt) % jokes.length];
+	}, [widthInt]);
 
 	return (
 		<div className={styles.ProgressBar_Container}>
@@ -38,3 +38,10 @@ const jokes = [
 	"Stealing cookies",
 	"Leaving the toilet seat up",
 ];
+
+function hash(x: number): number {
+	x = ((x >> 16) ^ x) * 0x45d9f3b;
+	x = ((x >> 16) ^ x) * 0x45d9f3b;
+	x = (x >> 16) ^ x;
+	return x;
+}

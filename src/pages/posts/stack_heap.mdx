@@ -11,7 +11,7 @@ export default function Layout({ children }) {
     return <BlogPost meta={meta}>{children}</BlogPost>;
 }
 
-# Stack vs Heap
+# Stack vs. Heap
 
 This is a simple post, inspired by many of the questions I have seen while on the
 Rust Programming Language Community Discord Server.
@@ -22,22 +22,20 @@ This question is innocent enough but asks all the wrong questions.
 
 ## What is the stack and heap?
 
-In a typical application process, your application will request memory and your
-operating system will provide.
+In a typical application process, your application will request memory, and the operating system will provide it.
 
 The stack is a linear region of memory that the OS will start a process with.
-As the name suggests, all memory is allocated in stack order. This means that
-the most recently allocated value is the first value to be deallocated
-(commonly known as LIFO).
+As the name suggests, all memory is allocated in stack order.
+This means that the most recently allocated value is the first value to be deallocated (commonly known as LIFO).
 
-It's not unreanable to want some values to live longer.
+It's not unreasonable to want some values to live longer.
 To support that we must allocate them elsewhere.
 The "heap" is for these allocations and they can be deallocated with no required order.
 
-## Stack types vs heap types
+## Stack types vs. heap types
 
 This is the tricky part. Languages like Java have 'stack' and 'heap' values.
-In Java the primtive type `int` is stored on the stack
+In Java, the primitive type `int` is stored on the stack
 and the object type `Integer` is stored on the heap.
 
 In Rust, this might be represented by `i32` and `Box<i32>`.
@@ -52,34 +50,36 @@ The heap isn't slow. Pointer indirection and heap allocations are slow. Let's br
 
 ### Pointer indirection
 
-All modern CPUs improve performence by using cache. Accessing your main memory can take a
-few hundred CPU cycles, which is far too slow. Instead the CPU will cache values.
+All modern CPUs improve performance by using cache. Accessing your main memory can take a
+few hundred CPU cycles, which is far too slow. Instead, the CPU will cache values.
 Because most memory is accessed linearly, it also caches data around in 'cache lines'.
 
-When you read data from a pointer, that requires loading new memory. A random pointer read will more often lead to a cache miss and require loading from memory. This is a performance loss known as pointer indirection.
+When you read data from a pointer, that requires loading new memory.
+A random pointer read will more often lead to a cache miss and require loading from memory.
+This is a performance loss known as pointer indirection.
 
 Sometimes this doesn't matter. Take a `&str` for instance.
-Since text strings can be arbitrarily long, we can't determine exactly at compile time
-how much stack space to reserve when passing a string by value. Therefore we must pass it as
-a pointer, length pair. Now, since it's behind a pointer anyway,
-it doesn't matter whether that points to the stack or the heap.
+Since text strings can be arbitrarily long, we can't determine exactly at compile time how much stack space to reserve when passing a string by value.
+Therefore we must pass it as a pointer, length pair.
+Now, since it's behind a pointer anyway, it doesn't matter whether that points to the stack or the heap.
 We are forced to do pointer lookups and potentially risk cache misses regardless.
 
 ### Heap Allocations
 
 The heap allocator is a complicated data structure with linked lists, tables, and syscalls.
 When you perform an allocation it requires finding a free slot in an available page.
-Deallocation requires releasing the slot in that page and adding making sure any free lists
-are updated. These can all be quite slow. My measurements on my M2 Pro suggest roughly 25ns for an allocation and another 25ns for deallocation. While it's not _that_ slow, it's at least 50x slower than a floating point operation which I measured average speeds of half a nanosecond.
+Deallocation requires releasing the slot on that page and making sure any free lists
+are updated. These can all be quite slow.
+My measurements on my M2 Pro suggest roughly 25ns for an allocation and another 25ns for deallocation.
+While it's not _that_ slow, it's at least 50x slower than a floating point operation which I measured average speeds of half a nanosecond.
 
-So if the allocations are slower, surely that means the heap is slower? Well no. If you need
-many short lived allocations, it can add up, but a one off allocation that will live for a while
-will not slow down your application.
+So if the allocations are slower, surely that means the heap is slower? Well no.
+If you need many short-lived allocations, it can add up, but a one-off allocation that will live for a while will not slow down your application.
 
 ## What should you care about?
 
-If you want to write high performance code,
-keep pointers and allocations out of a hot loop and optimise memory layout for cache.
+If you want to write high-performance code,
+keep pointers and allocations out of a hot loop and optimise the memory layout for the cache.
 
 If you want to write good performance code, just keep using Rust how you want to. Heap allocations
 are plenty fast and a pointer indirection is not going to cause a major slowdown.

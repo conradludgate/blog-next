@@ -6,6 +6,11 @@ export const meta = {
   imageURL: "https://conradludgate.com/og-image/ferris.png",
 };
 
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
 I've met a very disappointing realisation in the last couple days. Stack spawned futures are fundamentally _unsound_.
 
 What does this even mean? And how can I be certain that this can't be sound ever? Let's find out.

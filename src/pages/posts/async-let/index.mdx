@@ -6,6 +6,11 @@ export const meta = {
   imageURL: "https://conradludgate.com/og-image/ferris.png",
 };
 
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
 This post might be a bit all over the place.
 I currently have Covid-19 and the idea that I'm hoping to present is only half baked.
 I'm hoping that I can get these ideas out of my head so that others might work out the

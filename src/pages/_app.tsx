@@ -4,21 +4,12 @@ import Link from "next/link";
 import React, { ReactElement } from "react";
 import styles from "@/styles/App.module.css";
 import { useTracking } from "@/lib/umami";
-import About from "@/layouts/About";
-import BlogPost from "@/layouts/BlogPost";
-import { MDXProvider, MDXProviderComponentsProp } from "@mdx-js/react";
+import { MDXProvider } from "@mdx-js/react";
+import { Components } from "@mdx-js/react/lib";
 import Heading from "@/components/Heading";
 import Code from "@/components/Code";
 
-const components: MDXProviderComponentsProp = {
-	wrapper: (props) => {
-		switch (props.meta.layout) {
-		case "about":
-			return <About {...props} />;
-		default:
-			return <BlogPost {...props} />;
-		}
-	},
+const components: Components = {
 	h1: (props) => <Heading {...props} type={(props) => <h1 {...props} />} />,
 	h2: (props) => <Heading {...props} type={(props) => <h2 {...props} />} />,
 	h3: (props) => <Heading {...props} type={(props) => <h3 {...props} />} />,

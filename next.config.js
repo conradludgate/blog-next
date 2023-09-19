@@ -1,19 +1,24 @@
-const withPlugins = require("next-compose-plugins");
-const withMDX = require("@next/mdx")({
+import nextMdx from "@next/mdx";
+import prism from "remark-prism";
+import slug from "rehype-slug";
+
+const withMdx = nextMdx({
+	extension: /\.mdx?$/,
 	options: {
+		providerImportSource: "@mdx-js/react",
 		remarkPlugins: [
-			require("remark-prism"),
+			prism,
 		],
 		rehypePlugins: [
-			require("rehype-slug"),
+			slug,
 		],
-		extension: /\.mdx$/
 	},
 });
 
-module.exports = withPlugins([
-	withMDX,
-], {
+export default withMdx({
 	reactStrictMode: true,
-	pageExtensions: ["ts", "tsx", "mdx"]
+	pageExtensions: ["ts", "tsx", "mdx"],
+	images: {
+		unoptimized: true,
+	},
 });

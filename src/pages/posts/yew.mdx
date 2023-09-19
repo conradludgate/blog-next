@@ -6,6 +6,11 @@ export const meta = {
     imageURL: "https://conradludgate.com/og-image/ferris.png",
 }
 
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
 I recently discovered a really cool front-end framework written in [Rust](https://rust-lang.org/) called [Yew](https://yew.rs/).
 I feel like it's a spiritual cross between the functional language [Elm](https://elm-lang.org/) and [React](https://reactjs.org/).
 

@@ -8,6 +8,11 @@ export const meta = {
     imageURL: "https://conradludgate.com/og-image/ferris.png",
 };
 
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
 I've written a lot of macros. I've even written macros professionally.
 If there's one thing I'd have to say about macros is that they're hard to write effectively.
 However, this is my blog, I'm allowed to say as much about macros as I like.

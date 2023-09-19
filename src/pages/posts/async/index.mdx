@@ -8,6 +8,11 @@ export const meta = {
   imageURL: "https://conradludgate.com/og-image/ferris.png",
 };
 
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
 This is a deep dive into the land of async rust. Get a drink, grab a snack, because this is going to be a long one.
 
 ## What the Async?

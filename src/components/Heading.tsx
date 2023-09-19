@@ -2,9 +2,9 @@ import styles from "./Heading.module.css";
 import React, { FunctionComponent, ReactElement, ReactNode } from "react";
 
 export interface HeadingProps {
-	id: string,
-	type: FunctionComponent<{id: string, className: string, children: ReactNode}>,
-	children: ReactElement,
+	id?: string,
+	type: FunctionComponent<{ id?: string, className: string, children?: ReactNode }>,
+	children?: ReactNode,
 }
 
 export default function Heading({ id, type: Header, children }: HeadingProps): ReactElement {

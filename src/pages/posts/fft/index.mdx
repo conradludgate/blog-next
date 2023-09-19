@@ -11,6 +11,11 @@ export const meta = {
     desc: "I recently saw these two videos about the discrete fourier transform (DFT) and discovering the fast fourier transform (FFT) and I got re-inspired to experiment with the FFT algorithm again.",
 }
 
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
 I recently saw these two videos about the [discrete fourier transform (DFT)](https://www.youtube.com/watch?v=g8RkArhtCc4) and [discovering the fast fourier transform (FFT)](https://www.youtube.com/watch?v=h7apO7q16V0) and I got re-inspired to experiment with the FFT algorithm again.
 
 If you're not sure what a Fourier Transform is or you're not sure how the DFT or FFT algorithms work, then check out the videos above.

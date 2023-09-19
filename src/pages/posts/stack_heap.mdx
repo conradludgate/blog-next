@@ -16,9 +16,13 @@ export default function Layout({ children }) {
 This is a simple post, inspired by many of the questions I have seen while on the
 Rust Programming Language Community Discord Server.
 
-> Is a str stored on the stack or the heap?
+> Is a `&str` a pointer to the stack or the heap?
 
-This question is innocent enough but asks all the wrong questions.
+> Are all `Sized` types stored on the stack and unsized types are on the heap?
+
+> Are references automatically stored on the stack or the heap depending on type?
+
+These all seem like reasonable questions to ask. However, they are based on an important misconception
 
 ## What is the stack and heap?
 
@@ -60,7 +64,7 @@ This is a performance loss known as pointer indirection.
 
 Sometimes this doesn't matter. Take a `&str` for instance.
 Since text strings can be arbitrarily long, we can't determine exactly at compile time how much stack space to reserve when passing a string by value.
-Therefore we must pass it as a pointer, length pair.
+Therefore Rust decides that we pass it as a `(pointer, length)` pair.
 Now, since it's behind a pointer anyway, it doesn't matter whether that points to the stack or the heap.
 We are forced to do pointer lookups and potentially risk cache misses regardless.
 
@@ -80,24 +84,78 @@ If you need many short-lived allocations, it can add up, but a one-off allocatio
 
 If you want to write high-performance code,
 keep pointers and allocations out of a hot loop and optimise the memory layout for the cache.
+That doesn't mean that allocating and using pointers in your code will make your program slow.
+Writing in Rust will likely be significantly faster by default compared to Java, Python, or TypeScript.
 
-If you want to write good performance code, just keep using Rust how you want to. Heap allocations
-are plenty fast and a pointer indirection is not going to cause a major slowdown.
-Optimising for performance is often not necessary in production rust code as
-it's already likely faster than your network.
+## Answering the original questions
 
-## Answering the original question
+> Is a `&str` a pointer to the stack or the heap?
 
-> Is a str stored on the stack or the heap?
-
-Wherever it was allocated.
+It is a pointer to wherever it was allocated.
 
 ```rust
+// Allocate a String on the heap
 let heap: String = String::from("foo");
+// Create a stack value containing 3 bytes worth of string data
 let stack: [u8; 3] = *b"bar";
+// Create a static string stored in the application data segment
+static data: &'static str = "baz";
 
-// `&str` is on the heap, the stack and in static memory.
-let heap_str:   &str = &heap;
+// All 3 can be valid pointees for &str.
+let heap_str:   &str = &*heap;
 let stack_str:  &str = std::str::from_utf8(&stack).unwrap();
-let static_str: &str = "baz";
+let data_str: &str = data;
+```
+
+> Are all `Sized` types stored on the stack and unsized types are on the heap?
+
+No. You can allocate `Sized` values on the heap,
+and you can create unsized references to values stored on the stack
+
+```rust
+let sized_heap = Box::new(i32);
+
+let stack: [u8; 3] = *b"bar";
+let unsized_stack: &str = std::str::from_utf8(&stack).unwrap();
+```
+
+> Are references automatically stored on the stack or the heap depending on type?
+
+See above
+
+## Further related misconception
+
+> `&'static str` is stored in the data segment as static memory
+
+`'static` does not mean a reference to a `static`.
+It means that it lives as long as a `static`.
+
+In other words, this means that it has no other owner who is waiting to deallocate the value.
+If we use `String::leak` we can guarantee that the heap-allocated memory will not be deallocated.
+
+```rust
+let mut s = String::new();
+s.push_str("foo");
+s.push_str("bar");
+
+let static_str: &'static str = String::leak(s);
+```
+
+> `let` allocates on the stack
+
+`async` functions are 'stackless coroutines' - they don't have a stack.
+All memory that an async function will use needs to be pre-allocated.
+This is often allocated on the heap if you were to spawn this as a `tokio` task.
+
+```rust
+async fn foo() -> i32 {
+    let bar = 1;
+
+    tokio::task::yield_now().await;
+
+    bar
+}
+
+// `let bar` will be initialised in this heap allocation
+let boxed_future = Box::new(foo());
 ```

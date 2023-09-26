@@ -728,7 +728,7 @@ impl Wake for TaskWaker {
             // place it into our executor queue
             EXECUTOR.with(|e| {
                 let e = e.get().unwrap();
-                e.tasks.borrow_mut().push_back(fut)
+                e.tasks.borrow_mut().push_back(task)
             });
         }
     }

@@ -5,9 +5,17 @@
     <link>https://conradludgate.com/</link>
     <description>Ramblings from Conrad Ludgate</description>
     <language>en</language>
-    <lastBuildDate>Sun, 17 Jul 2022 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Fri, 06 Oct 2023 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
     
+    <item>
+      <guid>https://conradludgate.com/posts/k8s2</guid>
+      <title>A sequal of deployments</title>
+      <description>I no longer run minikube on my VPS. Why is this?</description>
+      <link>https://conradludgate.com/posts/k8s2</link>
+      <pubDate>Fri, 06 Oct 2023 00:00:00 GMT</pubDate>
+    </item>
+
     <item>
       <guid>https://conradludgate.com/posts/async-let</guid>
       <title>async let - A new concurrency primitve?</title>

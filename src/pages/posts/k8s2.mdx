@@ -31,7 +31,7 @@ Additionally, in kubernetes, I have installed
 
 When configuring kubeadm, I used the following command to allow me to use tailscale domains to connect to kubeadm over TLS.
 
-```
+```sh
 kubeadm init \
     --pod-network-cidr=10.244.0.0/16 \
     --kubernetes-version=v1.28.2 \
@@ -42,36 +42,35 @@ kubeadm init \
 
 I had to [fix some sysctl configurations](https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files) to make my system stable:
 
-in `/etc/sysctl.conf`
-```
+```sysctl
 fs.inotify.max_user_watches = 524288
 fs.inotify.max_user_instances = 512
 ```
 
 to configure grafana to be accessible over tailscale, I added the following config to the example kube-prometheus jsonnet:
-```jsonnet
+```json
 {
-  'grafana-ingress': {
-    apiVersion: 'networking.k8s.io/v1',
-    kind: 'Ingress',
-    metadata: {
-      name: 'grafana',
-      namespace: 'monitoring',
+  "grafana-ingress": {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "Ingress",
+    "metadata": {
+      "name": "grafana",
+      "namespace": "monitoring",
     },
-    spec: {
-      defaultBackend: {
-        service: {
-          name: 'grafana',
-          port: {
-            name: "http",
+    "spec": {
+      "defaultBackend": {
+        "service": {
+          "name": "grafana",
+          "port": {
+            "name": "http",
           },
         },
       },
-      ingressClassName: 'tailscale',
-      tls: [
+      "ingressClassName": "tailscale",
+      "tls": [
         {
-          hosts: [
-            '<tailscale grafana magicdns>',
+          "hosts": [
+            "<tailscale grafana magicdns>",
           ],
         },
       ],

@@ -1,0 +1,143 @@
+export const meta = {
+    title: "Postgres",
+    date: "2023-10-07",
+    tags: ["kubernetes", "postgres"],
+    desc: "I've always ran postgres on my VPS and always struggled at it. Can I do it better?",
+    imageURL: "https://conradludgate.com/og-image/containers.jpg",
+};
+
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+Before I get into the contents of this post, I want to say that I am employed
+by <https://neon.tech>. If you want to use postgres without worrying about backups
+and memory usage, try out Neon Serverless Postgres.
+
+---
+
+Now that's out of the way, for my little web apps I run postgres on my VPS.
+However, I've always found a way to lose my data. My day job is managing
+connections to databases, and not managing the databases themselves, so
+this stuff I am a little rusty on.
+
+I've always run the basic `postgres` docker image with no backups or replicas configured.
+Since I have a new cluster now, I thought I should try something new. I recently read about
+[CloudNative PG on HN](https://news.ycombinator.com/item?id=37616033) so I decided to look into it.
+It got high praise from the replies, which is quite remarkable for HN.
+
+It seems to have all the features I would want from a 'managed' postgres:
+* Managed backups
+* Easily create a new database
+* Manage secrets
+
+## Backups
+
+Since I always find a way to lose data, I should focus on backups.
+
+CloudNativePG has a [page on their backup configuration](https://cloudnative-pg.io/documentation/1.20/backup_recovery/)
+but I will elaborate on what I had to configure to get it working for me.
+
+First, I decided to use S3 as my object store for backups the price seems good to me.
+To use S3, I need some credentials. I made a policy in IAM with the following permissions
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "VisualEditor0",
+            "Effect": "Allow",
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:PutObjectRetention",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::my-bucket",
+                "arn:aws:s3:::my-bucket/*"
+            ]
+        }
+    ]
+}
+```
+
+I then created an IAM User with that policy only and created an access key.
+With that access key, I then configured the postgres cluster and the secrets:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backup-aws-creds
+  namespace: postgres
+data:
+  ACCESS_KEY_ID: "base64 encoded access key id"
+  ACCESS_SECRET_KEY: "base64 encoded secret key"
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: shared-cluster
+  namespace: postgres
+spec:
+  instances: 2
+
+  # Example of rolling update strategy:
+  # - unsupervised: automated update of the primary once all
+  #                 replicas have been upgraded (default)
+  # - supervised: requires manual supervision to perform
+  #               the switchover of the primary
+  primaryUpdateStrategy: unsupervised
+
+  # Require 4Gi of space
+  storage:
+    size: 4Gi
+
+  # metrics
+  monitoring:
+    enablePodMonitor: true
+
+  # backup config
+  backup:
+    barmanObjectStore:
+      destinationPath: "s3://my-bucket/postgres"
+      s3Credentials:
+        accessKeyId:
+          name: backup-aws-creds
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: backup-aws-creds
+          key: ACCESS_SECRET_KEY
+      wal:
+        compression: "bzip2"
+        encryption: "AES256"
+      data:
+        compression: "bzip2"
+        encryption: "AES256"
+
+    # Store 30days of backups
+    retentionPolicy: "30d"
+    # Backup from replicas preferred
+    target: "prefer-standby"
+
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: shared-cluster-backup-daily
+  namespace: postgres
+spec:
+  # this runs daily at midnight
+  # cron  :  S M H D M W
+  schedule: "0 0 0 * * *"
+  backupOwnerReference: self
+  cluster:
+    name: shared-cluster
+
+```
+
+After applying this, my bucket in S3 starts receiving WAL objects.

@@ -41,6 +41,14 @@
     </item>
 
     <item>
+      <guid>https://conradludgate.com/posts/cnpg</guid>
+      <title>Postgres</title>
+      <description>I've always ran postgres on my VPS and always struggled at it. Can I do it better?</description>
+      <link>https://conradludgate.com/posts/cnpg</link>
+      <pubDate>Sat, 07 Oct 2023 00:00:00 GMT</pubDate>
+    </item>
+
+    <item>
       <guid>https://conradludgate.com/posts/k8s2</guid>
       <title>A sequel of deployments</title>
       <description>I no longer run minikube on my VPS. Why is this?</description>

@@ -5,9 +5,17 @@
     <link>https://conradludgate.com/</link>
     <description>Ramblings from Conrad Ludgate</description>
     <language>en</language>
-    <lastBuildDate>Sun, 17 Jul 2022 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Tue, 19 Sep 2023 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
     
+    <item>
+      <guid>https://conradludgate.com/posts/stack_heap</guid>
+      <title>Stack vs Heap</title>
+      <description>Is str stored on the stack or the heap? Does it matter?</description>
+      <link>https://conradludgate.com/posts/stack_heap</link>
+      <pubDate>Tue, 19 Sep 2023 00:00:00 GMT</pubDate>
+    </item>
+
     <item>
       <guid>https://conradludgate.com/posts/async-let</guid>
       <title>async let - A new concurrency primitve?</title>

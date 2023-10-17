@@ -1,0 +1,161 @@
+export const meta = {
+    title: "Stack vs Heap",
+    date: "2023-09-19",
+    tags: ["rust"],
+    desc: "Is str stored on the stack or the heap? Does it matter?",
+    imageURL: "https://conradludgate.com/og-image/stack.jpg",
+};
+
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+# Stack vs. Heap
+
+This is a simple post, inspired by many of the questions I have seen while on the
+Rust Programming Language Community Discord Server.
+
+> Is a `&str` a pointer to the stack or the heap?
+
+> Are all `Sized` types stored on the stack and unsized types are on the heap?
+
+> Are references automatically stored on the stack or the heap depending on type?
+
+These all seem like reasonable questions to ask. However, they are based on an important misconception
+
+## What is the stack and heap?
+
+In a typical application process, your application will request memory, and the operating system will provide it.
+
+The stack is a linear region of memory that the OS will start a process with.
+As the name suggests, all memory is allocated in stack order.
+This means that the most recently allocated value is the first value to be deallocated (commonly known as LIFO).
+
+It's not unreasonable to want some values to live longer.
+To support that we must allocate them elsewhere.
+The "heap" is for these allocations and they can be deallocated with no required order.
+
+## Stack types vs. heap types
+
+This is the tricky part. Languages like Java have 'stack' and 'heap' values.
+In Java, the primitive type `int` is stored on the stack
+and the object type `Integer` is stored on the heap.
+
+In Rust, this might be represented by `i32` and `Box<i32>`.
+
+## Why might you care?
+
+The heap is 'slow'...
+
+## Why is this wrong?
+
+The heap isn't slow. Pointer indirection and heap allocations are slow. Let's break it down.
+
+### Pointer indirection
+
+All modern CPUs improve performance by using cache. Accessing your main memory can take a
+few hundred CPU cycles, which is far too slow. Instead, the CPU will cache values.
+Because most memory is accessed linearly, it also caches data around in 'cache lines'.
+
+When you read data from a pointer, that requires loading new memory.
+A random pointer read will more often lead to a cache miss and require loading from memory.
+This is a performance loss known as pointer indirection.
+
+Sometimes this doesn't matter. Take a `&str` for instance.
+Since text strings can be arbitrarily long, we can't determine exactly at compile time how much stack space to reserve when passing a string by value.
+Therefore Rust decides that we pass it as a `(pointer, length)` pair.
+Now, since it's behind a pointer anyway, it doesn't matter whether that points to the stack or the heap.
+We are forced to do pointer lookups and potentially risk cache misses regardless.
+
+### Heap Allocations
+
+The heap allocator is a complicated data structure with linked lists, tables, and syscalls.
+When you perform an allocation it requires finding a free slot in an available page.
+Deallocation requires releasing the slot on that page and making sure any free lists
+are updated. These can all be quite slow.
+My measurements on my M2 Pro suggest roughly 25ns for an allocation and another 25ns for deallocation.
+While it's not _that_ slow, it's at least 50x slower than a floating point operation which I measured average speeds of half a nanosecond.
+
+So if the allocations are slower, surely that means the heap is slower? Well no.
+If you need many short-lived allocations, it can add up, but a one-off allocation that will live for a while will not slow down your application.
+
+## What should you care about?
+
+If you want to write high-performance code,
+keep pointers and allocations out of a hot loop and optimise the memory layout for the cache.
+That doesn't mean that allocating and using pointers in your code will make your program slow.
+Writing in Rust will likely be significantly faster by default compared to Java, Python, or TypeScript.
+
+## Answering the original questions
+
+> Is a `&str` a pointer to the stack or the heap?
+
+It is a pointer to wherever it was allocated.
+
+```rust
+// Allocate a String on the heap
+let heap: String = String::from("foo");
+// Create a stack value containing 3 bytes worth of string data
+let stack: [u8; 3] = *b"bar";
+// Create a static string stored in the application data segment
+static data: &'static str = "baz";
+
+// All 3 can be valid pointees for &str.
+let heap_str:   &str = &*heap;
+let stack_str:  &str = std::str::from_utf8(&stack).unwrap();
+let data_str: &str = data;
+```
+
+> Are all `Sized` types stored on the stack and unsized types are on the heap?
+
+No. You can allocate `Sized` values on the heap,
+and you can create unsized references to values stored on the stack
+
+```rust
+let sized_heap = Box::new(i32);
+
+let stack: [u8; 3] = *b"bar";
+let unsized_stack: &str = std::str::from_utf8(&stack).unwrap();
+```
+
+> Are references automatically stored on the stack or the heap depending on type?
+
+See above
+
+## Further related misconception
+
+> `&'static str` is stored in the data segment as static memory
+
+`'static` does not mean a reference to a `static`.
+It means that it lives as long as a `static`.
+
+In other words, this means that it has no other owner who is waiting to deallocate the value.
+If we use `String::leak` we can guarantee that the heap-allocated memory will not be deallocated.
+
+```rust
+let mut s = String::new();
+s.push_str("foo");
+s.push_str("bar");
+
+let static_str: &'static str = String::leak(s);
+```
+
+> `let` allocates on the stack
+
+`async` functions are 'stackless coroutines' - they don't have a stack.
+All memory that an async function will use needs to be pre-allocated.
+This is often allocated on the heap if you were to spawn this as a `tokio` task.
+
+```rust
+async fn foo() -> i32 {
+    let bar = 1;
+
+    tokio::task::yield_now().await;
+
+    bar
+}
+
+// `let bar` will be initialised in this heap allocation
+let boxed_future = Box::new(foo());
+```

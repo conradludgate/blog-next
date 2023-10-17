@@ -1,0 +1,111 @@
+export const meta = {
+    title: "A sequel of deployments",
+    date: "2023-10-06",
+    tags: ["kubernetes"],
+    desc: "I no longer run minikube on my VPS. Why is this?",
+    imageURL: "https://conradludgate.com/og-image/containers.jpg",
+};
+
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+[2 years ago I wrote a post](https://conradludgate.com/posts/k8s) about how I eventually settled on running minikube to run my personal projects on.
+This is an update to that post.
+
+The intended audience for this post is myself, for when I inevitably forget this and I need to look it up again, but I hope it helps you too.
+
+## What am I now using?
+
+Yesterday, I purchased a new CPX31 cloud server from Hetzner, with 4vCPU and 8GB of memory, and 160GB of SSD space available.
+On it, I am running Ubuntu 22.04 and I followed this [guide on installing Kubernetes](https://community.hetzner.com/tutorials/install-kubernetes-cluster).
+On the VPS, I am running Tailscale for controlling access - firewalled to allow only tailscale, and http traffic.
+
+Additionally, in kubernetes, I have installed
+* [Nginx](https://docs.nginx.com/nginx-ingress-controller/installation/installation-with-manifests/)
+* [Prometheus](https://github.com/prometheus-operator/kube-prometheus)
+* [Tailscale](https://tailscale.com/kb/1236/kubernetes-operator/)
+* [Cert manager](https://cert-manager.io/)
+* [Linkerd](https://linkerd.io/)
+
+When configuring kubeadm, I used the following command to allow me to use tailscale domains to connect to kubeadm over TLS.
+
+```sh
+kubeadm init \
+    --pod-network-cidr=10.244.0.0/16 \
+    --kubernetes-version=v1.28.2 \
+    --ignore-preflight-errors=NumCPU \
+    --upload-certs \
+    --apiserver-cert-extra-sans 10.0.0.1,$TAILSCALE_IP,$TAILSCALE_MAGICDNS,$MY_OWN_DNS
+```
+
+I had to [fix some sysctl configurations](https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files) to make my system stable:
+
+```sysctl
+fs.inotify.max_user_watches = 524288
+fs.inotify.max_user_instances = 512
+```
+
+to configure grafana to be accessible over tailscale, I added the following config to the example kube-prometheus jsonnet:
+```json
+{
+  "grafana-ingress": {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "Ingress",
+    "metadata": {
+      "name": "grafana",
+      "namespace": "monitoring",
+    },
+    "spec": {
+      "defaultBackend": {
+        "service": {
+          "name": "grafana",
+          "port": {
+            "name": "http",
+          },
+        },
+      },
+      "ingressClassName": "tailscale",
+      "tls": [
+        {
+          "hosts": [
+            "<tailscale grafana magicdns>",
+          ],
+        },
+      ],
+    },
+  },
+}
+```
+
+## What was I using?
+
+I was running a similarly specced VPS from OVH, running Ubuntu 21. On it, I was running minikube through the SSH driver. This worked great until the first crash...
+I previously ran to minikube to help with the crash story, but I didn't test it properly...
+
+Minikube, as it turns out, doesn't persist the kubeadm and kubelet services through reboots. Every time my server restarted, I would need to run
+
+```sh
+minikube start --driver=ssh --ssh-user='ubuntu' --ssh-ip-address="$SERVER_IP" --ssh-key="$SSH_KEY" --alsologtostderr
+```
+(thanks to [atuin](https://atuin.sh) for always helping me find that incantation)
+
+If a server cannot tolerate restarting and bringing back up it's state, that's unnecessary burden for me. It also wasn't as simple as that,
+since minikube would auto update the software and it would usually break in a different way every time. Yesterday, it broke because
+docker was configured with `--storage-engine overlay2` twice :)
+
+## This is still not the end
+
+I'm many years in to my professional development career. I am not an expert with kubernetes by any means, but I have become much more fluent in it
+than when I first setup minikube 2 years ago. That being said, in my last post I reflected that this wouldn't be the final straw for my little applications.
+I brought up Nomad, but Hashicorp is losing the trust they once had.
+I personally don't disagree with their licensing changes, but I can imagine that less companies will be willing to consider Nomad until there's little choice left.
+
+> Maybe a completely different application paradigm will launch and I'll abandon ship.
+
+I'm keeping a distant eye on [Aurae](https://aurae.io/), started by the late Kris Nova.
+This seems to have a much simpler base than Kubernetes.
+I know some infra teams have stopped using helm and yaml as a declarative configuration for a cluster,
+and have moved to using kubernetes operators written in Go or [Rust](https://github.com/kube-rs/kube) to manage more and more resources.
+Aurae looks like it could manage this well. Not that she needs it, but I hope it takes off and continues Kris' legacy.

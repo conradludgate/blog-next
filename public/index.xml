@@ -9,19 +9,19 @@
     <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
     
     <item>
-      <guid>https://conradludgate.com/posts/bbq1</guid>
-      <title>Broke But Quick</title>
-      <description>I wanted to learn more about QUIC, so I am writing a message broker?</description>
-      <link>https://conradludgate.com/posts/bbq1</link>
-      <pubDate>Mon, 23 Oct 2023 00:00:00 GMT</pubDate>
-    </item>
-
-    <item>
       <guid>https://conradludgate.com/posts/bbq2</guid>
       <title>Broke But Quick 2</title>
       <description>Now that I have connections and streams working, can I publish messages?</description>
       <link>https://conradludgate.com/posts/bbq2</link>
       <pubDate>Mon, 23 Oct 2023 00:00:00 GMT</pubDate>
+    </item>
+
+    <item>
+      <guid>https://conradludgate.com/posts/bbq1</guid>
+      <title>Broke But Quick</title>
+      <description>I wanted to learn more about QUIC, so I am writing a message broker?</description>
+      <link>https://conradludgate.com/posts/bbq1</link>
+      <pubDate>Sun, 22 Oct 2023 00:00:00 GMT</pubDate>
     </item>
 
     <item>

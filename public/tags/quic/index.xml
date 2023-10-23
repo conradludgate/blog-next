@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Conrad Ludgate</title>
+    <link>https://conradludgate.com/</link>
+    <description>Ramblings from Conrad Ludgate</description>
+    <language>en</language>
+    <lastBuildDate>Mon, 23 Oct 2023 00:00:00 GMT</lastBuildDate>
+    <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
+    
+    <item>
+      <guid>https://conradludgate.com/posts/bbq1</guid>
+      <title>Broke But Quick</title>
+      <description>I wanted to learn more about QUIC, so I am writing a message broker?</description>
+      <link>https://conradludgate.com/posts/bbq1</link>
+      <pubDate>Mon, 23 Oct 2023 00:00:00 GMT</pubDate>
+    </item>
+
+    <item>
+      <guid>https://conradludgate.com/posts/bbq2</guid>
+      <title>Broke But Quick 2</title>
+      <description>Now that I have connections and streams working, can I publish messages?</description>
+      <link>https://conradludgate.com/posts/bbq2</link>
+      <pubDate>Mon, 23 Oct 2023 00:00:00 GMT</pubDate>
+    </item>
+
+  </channel>
+</rss>

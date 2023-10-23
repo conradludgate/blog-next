@@ -1,0 +1,58 @@
+export const meta = {
+    title: "Broke But Quick",
+    date: "2023-10-23",
+    tags: ["rust", "quic", "rabbitmq"],
+    desc: "I wanted to learn more about QUIC, so I am writing a message broker?",
+    imageURL: "https://conradludgate.com/og-image/containers.jpg",
+};
+
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+> This blog series is supplementary to my new live programming YouTube series. https://www.youtube.com/playlist/PLviKKZqzhk18R69OM7EtMHGrKXCHHfdfl
+> Here is the associated episode: https://youtu.be/lpsduJy2EIM
+
+I wanted to learn more about QUIC, the transport protocol behind HTTP/3. It's inspired by the learnings of HTTP/2. Some of the notable features:
+
+1. The connection handshake and the TLS handshake occur together. Reducing a roundtrip.
+2. With pre-shared keys, it supports zero-round-trip connections, which is useful for mobile network switchovers.
+3. Connections have built-in support for multiplexing, which makes it straightforward to implement concurrent requests.
+
+I was thinking about what I could implement that could take advantage of these functionalities. I'm not too sure how I can take advantage of point 2 above,
+but point 3 made me think of another protocol that I am familiar with, the Advanced Message Queue Protocol (AMQP) as implemented by RabbitMQ.
+
+AMQP has a channel abstraction, which is for multiplexed connections. This allows you to consume from multiple queues without having multiple connections open.
+
+So, that's what I'm going to experiment with. Writing my own message broker in Rust using QUIC.
+
+## Prior setup
+
+I'm going to use [`quinn`](https://docs.rs/quinn/latest/quinn/index.html) which is inspired from the implementation of [`h2`](https://docs.rs/h2/latest/h2/).
+Since `quinn` makes strict assumptions about [`rustls`](https://docs.rs/rustls/latest/rustls/), I will also lean into it and use mTLS for authentication, instead of using an additional username and password flow.
+
+I am using [`rcgen`](https://docs.rs/rcgen/latest/rcgen/) to generate the certifications that I know will work with `rustls`.
+
+## Starting point
+
+I want to make sure that my mTLS setup and `quinn` works properly, so start off by experimenting with creating a connection and a stream, and writing data.
+It wasn't too hard, you have to create an `Endpoint` on both sides, one using a `ClientConfig` and one using a `ServerConfig`.
+
+On the server you can `accept()` connection requests, which gives you a `Connecting` struct.
+Spawn that off to a `tokio` task and await it to establish the TLS authenticated connection.
+
+On the client, you can `connect` to a socket address which similarly returns a `Connecting`.
+Await that, and if the TLS hostname is correct and the certificates are validated, the connection will be ready to use.
+
+On both sides now, it's possible to use `accept_bi` and `open_bi` to open new sub-connections, called 'streams' in QUIC. This returns on both sides a
+`SendStream` and a `RecvStream` which implement `AsyncWrite` and `AsyncRead` respectively. What caught me out at first is that stream open requests are buffered.
+If you open a bi-directional stream on the client, the server will not be notified of that stream until you `flush()` the stream.
+This is part of what makes streams so lightweight. Once I figured out that you had to use `flush()` or `finish()`, I was able to get a quick echo example
+working.
+
+---
+
+You can follow along with the code in this post [on GitHub](https://github.com/conradludgate/broke-but-quick/tree/b6b8f09c1240eb22960064a599cd864163e07ed6)
+
+[Next](/posts/bbq2)

@@ -29,8 +29,9 @@ So, that's what I'm going to experiment with. Writing my own message broker in R
 
 ## Prior setup
 
-I'm going to use [`quinn`](https://docs.rs/quinn/latest/quinn/index.html) which is inspired from the implementation of [`h2`](https://docs.rs/h2/latest/h2/).
-Since `quinn` makes strict assumptions about [`rustls`](https://docs.rs/rustls/latest/rustls/), I will also lean into it and use mTLS for authentication, instead of using an additional username and password flow.
+I'm going to use [`quinn`](https://docs.rs/quinn/latest/quinn/index.html) which is inspired by the implementation of [`h2`](https://docs.rs/h2/latest/h2/).
+Since `quinn` makes strict assumptions about [`rustls`](https://docs.rs/rustls/latest/rustls/), I will also lean into it and use mTLS for authentication,
+instead of using an additional username and password flow.
 
 I am using [`rcgen`](https://docs.rs/rcgen/latest/rcgen/) to generate the certifications that I know will work with `rustls`.
 
@@ -39,7 +40,7 @@ I am using [`rcgen`](https://docs.rs/rcgen/latest/rcgen/) to generate the certif
 I want to make sure that my mTLS setup and `quinn` works properly, so start off by experimenting with creating a connection and a stream, and writing data.
 It wasn't too hard, you have to create an `Endpoint` on both sides, one using a `ClientConfig` and one using a `ServerConfig`.
 
-On the server you can `accept()` connection requests, which gives you a `Connecting` struct.
+On the server, you can `accept()` connection requests, which gives you a `Connecting` struct.
 Spawn that off to a `tokio` task and await it to establish the TLS authenticated connection.
 
 On the client, you can `connect` to a socket address which similarly returns a `Connecting`.

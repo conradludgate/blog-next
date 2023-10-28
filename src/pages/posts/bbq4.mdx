@@ -1,0 +1,65 @@
+export const meta = {
+    title: "Broke But Quick 4",
+    date: "2023-10-28",
+    tags: ["rust", "quic", "rabbitmq", "bbq"],
+    desc: "The start of durable queues",
+    imageURL: "https://conradludgate.com/og-image/bbq/bbq4.png",
+};
+
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+> This blog series is supplementary to my new [live programming YouTube series](https://www.youtube.com/playlist?list=PLviKKZqzhk18R69OM7EtMHGrKXCHHfdfl).
+> [Watch me program this live](https://youtu.be/PoqIy3dOR_Q)
+
+In the [previous post](/posts/bbq3), I got basic message consumption working, even with some form of message acknowledgement,
+but I wasn't quite finished. I had a few things that I needed to fix before I could move forward.
+
+## Waiting for messages
+
+It was good that I could consume a message, but I had no way of being able to wait for a new message. I made the old code return None if
+there were no available messages.
+
+To address this, I added a []`tokio::sync::Notify`}(https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html) to a new `QueueState`
+struct. Using this `Notify`. If there was no message in the queue, the stream would wait for the notify signal. When publishing messages,
+I would call `notify_one()` to alert any waiting consumers.
+
+## Automatic Negative Acknowledgements
+
+If a connection acquired a message, it would not handled again by another consumer unless it was "negatively acknowledged".
+Only then would the message go back to the available queue. However, if a connection exited without acknowledging the message,
+it would never be available again. In an "at least once" messaging system, we have no way of knowing that the message was processed,
+so it's safer to assume it wasn't and re-queue it.
+
+To do so, I created a `ConnectionState` struct that stores the current list of acquired messages. On acknowledgement, the message ID
+is removed from the list. On connection failure, the message IDs would be iterated over and placed back to the ready state.
+
+## Durability
+
+Currently, all state is stored in memory. Not great if we want to scale up and survive restarts. To solve this, I am introducing
+a [`sled`](https://docs.rs/sled/latest/sled/index.html) database. Sled offers basic transactional key-value b-trees and nothing more.
+
+I create a database and add it to the shared state of the app. This database will have 2 trees, for now,
+a list of available messages and a list of acquired messages.
+
+I got messages being saved into the published queue, but I didn't get them being moved into an acquired queue just yet.
+
+## What next
+
+I need to fix the message acquisition so I can remove the previous queue code and only use the database.
+Afterwards, I want to design a few different and customisable queuing structures:
+* FIFO
+* Durable at least once
+* At most once
+
+Eventually, I wrote about this on twitter[1](https://nitter.net/ConradLudgate/status/1717073752414929360)[2](https://nitter.net/ConradLudgate/status/1717805637713994173),
+I want to be able to deploy this in a distributed configuration. This will add some more complications but make it more interesting! I think
+I need to update my thumbnails because this is no longer just "a message queue in Rust with QUIC". It's a "distributed message queue in Rust with QUIC and Raft" :D
+
+---
+
+You can follow along with the code in this post [on GitHub](https://github.com/conradludgate/broke-but-quick/tree/7e415c3212829bc95abb8c0928a618b074501b01)
+
+[Prev](/posts/bbq3)

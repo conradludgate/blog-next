@@ -22,7 +22,7 @@ but I wasn't quite finished. I had a few things that I needed to fix before I co
 It was good that I could consume a message, but I had no way of being able to wait for a new message. I made the old code return None if
 there were no available messages.
 
-To address this, I added a []`tokio::sync::Notify`}(https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html) to a new `QueueState`
+To address this, I added a [`tokio::sync::Notify`](https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html) to a new `QueueState`
 struct. Using this `Notify`. If there was no message in the queue, the stream would wait for the notify signal. When publishing messages,
 I would call `notify_one()` to alert any waiting consumers.
 

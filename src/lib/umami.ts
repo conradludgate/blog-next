@@ -1,107 +1,98 @@
 import { useRouter } from "next/router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 export function useTracking(): void {
+	const [currentUrl, setCurrentUrl] = useState("");
+	const [currentRef, setCurrentRef] = useState("");
 	const router = useRouter();
 	useEffect(() => {
-		trackView();
+		const {
+			location: { pathname, search },
+		} = window;
+		if (!currentUrl) { setCurrentUrl(`${pathname}${search}`); }
+		if (!currentRef) { setCurrentRef(document.referrer); }
+
 		const handleRouteChange = (url: string) => {
-			const {
-				location: { pathname, search },
-			} = window;
-			const currentUrl = `${pathname}${search}`;
-			trackView(url, currentUrl);
+			setCurrentRef(currentUrl);
+			setCurrentUrl(url.toString());
+
+			if (currentUrl !== currentRef) {
+				setTimeout(() => send(getPayload(currentUrl, currentRef)), delayDuration);
+			}
 		};
 		router.events.on("beforeHistoryChange", handleRouteChange);
 		return () => { router.events.off("beforeHistoryChange", handleRouteChange); };
-	}, [router.events]);
+	}, [router.events, currentRef, currentUrl, setCurrentRef, setCurrentUrl]);
 }
 
 const website = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID;
 const hostURL = process.env.NEXT_PUBLIC_UMAMI_HOST_URL;
 
-interface Pageview {
-	type: "pageview",
-	payload: {
-		url: string,
-		referrer: string,
-	},
-}
+const ignoredDomains: string[] = ["localhost:3000"];
+const delayDuration = 300;
 
-interface Event {
-	type: "event",
-	payload: {
-		event_type: string,
-		event_value: string,
-		url: string,
-	},
-}
-
-async function collect(body: Pageview | Event, website: string | undefined): Promise<void> {
-	if (localStorage.getItem("umami.disabled") || website === undefined || window.location.hostname !== "conradludgate.com") return;
-
+const getPayload = (currentUrl: string, currentRef: string) => {
 	const {
 		screen: { width, height },
 		navigator: { language },
-		location: { hostname },
+		location,
 	} = window;
+	const { hostname } = location;
 	const screen = `${width}x${height}`;
 
-	const type = body.type;
-	const payload = {
+	return {
 		website,
 		hostname,
 		screen,
 		language,
-		...body.payload,
+		title: window.document.title,
+		url: currentUrl,
+		referrer: currentRef,
+	};
+};
+
+/* Tracking functions */
+
+/* eslint @typescript-eslint/ban-ts-comment: "off" */
+const doNotTrack: () => boolean = () => {
+	// @ts-ignore
+	const { doNotTrack, navigator, external } = window;
+
+	const msTrackProtection = "msTrackingProtectionEnabled";
+	const msTracking = () => {
+		// @ts-ignore
+		return external && msTrackProtection in external && external[msTrackProtection]();
 	};
 
-	await fetch(`${hostURL}/api/collect`, {
+	// @ts-ignore
+	const dnt = doNotTrack || navigator.doNotTrack || navigator.msDoNotTrack || msTracking();
+
+	return dnt == "1" || dnt === "yes";
+};
+
+const trackingDisabled = () =>
+	(window.localStorage && window.localStorage.getItem("umami.disabled")) ||
+	doNotTrack() ||
+	(!ignoredDomains.includes(window.location.hostname));
+
+let cache: string | undefined = undefined;
+
+/* eslint @typescript-eslint/no-explicit-any: "off" */
+const send: (payload: any, type?: string) => Promise<string | void> = (payload, type = "event") => {
+	if (trackingDisabled()) return Promise.resolve();
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+	};
+	if (typeof cache !== "undefined") {
+		headers["x-umami-cache"] = cache;
+	}
+	return fetch(`${hostURL}/api/send`, {
 		method: "POST",
-		headers: {
-			"Content-Type": "application/json"
-		},
-		body: JSON.stringify({
-			type,
-			payload,
-		})
-	});
-}
-
-export async function trackView(url?: string, referrer?: string): Promise<void> {
-	const {
-		location: { pathname, search },
-	} = window;
-	const currentUrl = `${pathname}${search}`;
-	const currentRef = document.referrer;
-
-	await collect(
-		{
-			type: "pageview",
-			payload: {
-				url: url || currentUrl,
-				referrer: referrer || currentRef,
-			}
-		},
-		website,
-	);
-}
-
-export async function trackEvent(event_value: string, event_type?: string, url?: string): Promise<void> {
-	const {
-		location: { pathname, search },
-	} = window;
-	const currentUrl = `${pathname}${search}`;
-
-	await collect(
-		{
-			type: "event",
-			payload: {
-				event_type: event_type || "custom",
-				event_value,
-				url: url || currentUrl,
-			}
-		},
-		website,
-	);
-}
+		body: JSON.stringify({ type, payload }),
+		headers,
+	})
+		.then(res => res.text())
+		.then(text => (cache = text))
+		/* eslint @typescript-eslint/no-empty-function: "off" */
+		.catch(() => { }); // no-op, gulp error
+};

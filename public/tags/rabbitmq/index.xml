@@ -5,9 +5,17 @@
     <link>https://conradludgate.com/</link>
     <description>Ramblings from Conrad Ludgate</description>
     <language>en</language>
-    <lastBuildDate>Wed, 25 Oct 2023 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Sat, 28 Oct 2023 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
     
+    <item>
+      <guid>https://conradludgate.com/posts/bbq4</guid>
+      <title>Broke But Quick 4</title>
+      <description>The start of durable queues</description>
+      <link>https://conradludgate.com/posts/bbq4</link>
+      <pubDate>Sat, 28 Oct 2023 00:00:00 GMT</pubDate>
+    </item>
+
     <item>
       <guid>https://conradludgate.com/posts/bbq3</guid>
       <title>Broke But Quick 3</title>

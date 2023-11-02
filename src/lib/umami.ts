@@ -1,34 +1,28 @@
 import { useRouter } from "next/router";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 export function useTracking(): void {
-	const [currentUrl, setCurrentUrl] = useState("");
-	const [currentRef, setCurrentRef] = useState("");
 	const router = useRouter();
 	useEffect(() => {
-		const {
-			location: { pathname, search },
-		} = window;
-		if (!currentUrl) { setCurrentUrl(`${pathname}${search}`); }
-		if (!currentRef) { setCurrentRef(document.referrer); }
-
 		const handleRouteChange = (url: string) => {
-			setCurrentRef(currentUrl);
-			setCurrentUrl(url.toString());
-
+			const {
+				location: { pathname, search },
+			} = window;
+			const currentRef = `${pathname}${search}`;
+			const currentUrl = url.toString();
 			if (currentUrl !== currentRef) {
 				setTimeout(() => send(getPayload(currentUrl, currentRef)), delayDuration);
 			}
 		};
 		router.events.on("beforeHistoryChange", handleRouteChange);
 		return () => { router.events.off("beforeHistoryChange", handleRouteChange); };
-	}, [router.events, currentRef, currentUrl, setCurrentRef, setCurrentUrl]);
+	}, [router.events]);
 }
 
 const website = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID;
 const hostURL = process.env.NEXT_PUBLIC_UMAMI_HOST_URL;
 
-const ignoredDomains: string[] = ["localhost:3000"];
+const domains: string[] = ["conradludgate.com"];
 const delayDuration = 300;
 
 const getPayload = (currentUrl: string, currentRef: string) => {
@@ -73,7 +67,7 @@ const doNotTrack: () => boolean = () => {
 const trackingDisabled = () =>
 	(window.localStorage && window.localStorage.getItem("umami.disabled")) ||
 	doNotTrack() ||
-	(!ignoredDomains.includes(window.location.hostname));
+	(!domains.includes(window.location.hostname));
 
 let cache: string | undefined = undefined;
 

@@ -2,15 +2,20 @@ import { useRouter } from "next/router";
 import { useEffect } from "react";
 
 export function useTracking(): void {
+	const {
+		location: { pathname, search },
+	} = window;
+	let currentUrl = `${pathname}${search}`;
+	let currentRef = document.referrer;
 	const router = useRouter();
 	useEffect(() => {
-		trackView();
 		const handleRouteChange = (url: string) => {
-			const {
-				location: { pathname, search },
-			} = window;
-			const currentUrl = `${pathname}${search}`;
-			trackView(url, currentUrl);
+			currentRef = currentUrl;
+			currentUrl = url.toString();
+
+			if (currentUrl !== currentRef) {
+				setTimeout(() => send(getPayload(currentUrl, currentRef)), delayDuration);
+			}
 		};
 		router.events.on("beforeHistoryChange", handleRouteChange);
 		return () => { router.events.off("beforeHistoryChange", handleRouteChange); };
@@ -20,88 +25,67 @@ export function useTracking(): void {
 const website = process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID;
 const hostURL = process.env.NEXT_PUBLIC_UMAMI_HOST_URL;
 
-interface Pageview {
-	type: "pageview",
-	payload: {
-		url: string,
-		referrer: string,
-	},
-}
+const {
+	screen: { width, height },
+	navigator: { language },
+	location,
+	localStorage,
+	document,
+} = window;
+const { hostname } = location;
 
-interface Event {
-	type: "event",
-	payload: {
-		event_type: string,
-		event_value: string,
-		url: string,
-	},
-}
+const ignoredDomains: string[] = ["localhost:3000"];
+const screen = `${width}x${height}`;
+const delayDuration = 300;
 
-async function collect(body: Pageview | Event, website: string | undefined): Promise<void> {
-	if (localStorage.getItem("umami.disabled") || website === undefined || window.location.hostname !== "conradludgate.com") return;
+const getPayload = (currentUrl: string, currentRef: string) => ({
+	website,
+	hostname,
+	screen,
+	language,
+	title: window.document.title,
+	url: currentUrl,
+	referrer: currentRef,
+});
 
-	const {
-		screen: { width, height },
-		navigator: { language },
-		location: { hostname },
-	} = window;
-	const screen = `${width}x${height}`;
+/* Tracking functions */
 
-	const type = body.type;
-	const payload = {
-		website,
-		hostname,
-		screen,
-		language,
-		...body.payload,
+const doNotTrack: () => boolean = () => {
+	// @ts-ignore
+	const { doNotTrack, navigator, external } = window;
+
+	const msTrackProtection = 'msTrackingProtectionEnabled';
+	const msTracking = () => {
+		// @ts-ignore
+		return external && msTrackProtection in external && external[msTrackProtection]();
 	};
 
-	await fetch(`${hostURL}/api/collect`, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json"
-		},
-		body: JSON.stringify({
-			type,
-			payload,
-		})
-	});
-}
+	// @ts-ignore
+	const dnt = doNotTrack || navigator.doNotTrack || navigator.msDoNotTrack || msTracking();
 
-export async function trackView(url?: string, referrer?: string): Promise<void> {
-	const {
-		location: { pathname, search },
-	} = window;
-	const currentUrl = `${pathname}${search}`;
-	const currentRef = document.referrer;
+	return dnt == '1' || dnt === 'yes';
+};
 
-	await collect(
-		{
-			type: "pageview",
-			payload: {
-				url: url || currentUrl,
-				referrer: referrer || currentRef,
-			}
-		},
-		website,
-	);
-}
+const trackingDisabled = () =>
+	(localStorage && localStorage.getItem('umami.disabled')) ||
+	doNotTrack() ||
+	(!ignoredDomains.includes(hostname));
 
-export async function trackEvent(event_value: string, event_type?: string, url?: string): Promise<void> {
-	const {
-		location: { pathname, search },
-	} = window;
-	const currentUrl = `${pathname}${search}`;
-
-	await collect(
-		{
-			type: "event",
-			payload: {
-				event_type: event_type || "custom",
-				event_value,
-				url: url || currentUrl,
-			}
-		},
-		website,
-	);
-}
+let cache: string | undefined = undefined;
+const send: (payload: any, type?: string) => Promise<string | void> = (payload, type = 'event') => {
+	if (trackingDisabled()) return Promise.resolve();
+	const headers: Record<string, string> = {
+		'Content-Type': 'application/json',
+	};
+	if (typeof cache !== 'undefined') {
+		headers['x-umami-cache'] = cache;
+	}
+	return fetch(`${hostURL}/api/send`, {
+		method: 'POST',
+		body: JSON.stringify({ type, payload }),
+		headers,
+	})
+		.then(res => res.text())
+		.then(text => (cache = text))
+		.catch(() => { }); // no-op, gulp error
+};

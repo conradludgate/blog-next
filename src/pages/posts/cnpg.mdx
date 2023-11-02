@@ -52,8 +52,8 @@ To use S3, I need some credentials. I made a policy in IAM with the following pe
             "Action": [
                 "s3:PutObject",
                 "s3:GetObject",
-                "s3:PutObjectRetention",
-                "s3:ListBucket"
+                "s3:ListBucket",
+                "s3:DeleteObject"
             ],
             "Resource": [
                 "arn:aws:s3:::my-bucket",
@@ -67,17 +67,14 @@ To use S3, I need some credentials. I made a policy in IAM with the following pe
 I then created an IAM User with that policy only and created an access key.
 With that access key, I then configured the postgres cluster and the secrets:
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: backup-aws-creds
-  namespace: postgres
-data:
-  ACCESS_KEY_ID: "base64 encoded access key id"
-  ACCESS_SECRET_KEY: "base64 encoded secret key"
+```sh
+kubectl -n postgres create secret generic backup-aws-creds \
+  --from-literal='ACCESS_KEY_ID=...' \
+  --from-literal='ACCESS_SECRET_KEY=...' \
+  --from-literal='AWS_REGION=...'
+```
 
----
+```yaml
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -141,3 +138,31 @@ spec:
 ```
 
 After applying this, my bucket in S3 starts receiving WAL objects.
+
+I already had an existing database I wanted to import, adding
+
+```yaml
+spec:
+  bootstrap:
+    initdb:
+      import:
+        type: microservice
+        databases:
+          - dbname
+        source:
+          externalCluster: old-db
+
+  externalClusters:
+    - name: old-db
+      connectionParameters:
+        host: postgres
+        user: user
+        dbname: dbname
+      password:
+        name: dbcredentials
+        key: postgres_pass
+```
+
+worked flawlessly to import my data.
+Note, this is an 'offline' import so it's best to stop the service that is
+writing data into this DB

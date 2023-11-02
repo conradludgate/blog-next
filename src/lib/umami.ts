@@ -4,11 +4,12 @@ import { useEffect } from "react";
 export function useTracking(): void {
 	const router = useRouter();
 	useEffect(() => {
+		setTimeout(() => send(getPayload(
+			`${window.location.pathname}${window.location.search}`,
+			window.document.referrer,
+		)), delayDuration);
 		const handleRouteChange = (url: string) => {
-			const {
-				location: { pathname, search },
-			} = window;
-			const currentRef = `${pathname}${search}`;
+			const currentRef = `${window.location.pathname}${window.location.search}`;
 			const currentUrl = url.toString();
 			if (currentUrl !== currentRef) {
 				setTimeout(() => send(getPayload(currentUrl, currentRef)), delayDuration);

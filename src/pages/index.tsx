@@ -20,6 +20,7 @@ export default function Home({ posts }: Posts): ReactElement {
 			<meta property="og:site_name" content="Conrad Ludgate" />
 			<meta property="og:image" content="https://conradludgate.com/android-icon-192x192.png" />
 		</Head>
+		<a href="https://social.conrad.cafe/@conrad" rel="me" hidden></a>
 		<div className={styles.container}>
 			<div className={styles.Links}>
 				<Link href="/about" prefetch={false}>About</Link>

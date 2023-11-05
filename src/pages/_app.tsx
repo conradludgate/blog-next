@@ -5,11 +5,11 @@ import React, { ReactElement } from "react";
 import styles from "@/styles/App.module.css";
 import { useTracking } from "@/lib/umami";
 import { MDXProvider } from "@mdx-js/react";
-import { Components } from "@mdx-js/react/lib";
+import { MDXComponents } from "@mdx-js/react/lib";
 import Heading from "@/components/Heading";
 import Code from "@/components/Code";
 
-const components: Components = {
+const components: MDXComponents = {
 	h1: (props) => <Heading {...props} type={(props) => <h1 {...props} />} />,
 	h2: (props) => <Heading {...props} type={(props) => <h2 {...props} />} />,
 	h3: (props) => <Heading {...props} type={(props) => <h3 {...props} />} />,

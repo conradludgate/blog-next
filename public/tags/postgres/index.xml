@@ -5,7 +5,7 @@
     <link>https://conradludgate.com/</link>
     <description>Ramblings from Conrad Ludgate</description>
     <language>en</language>
-    <lastBuildDate>Sat, 07 Oct 2023 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Sun, 05 Nov 2023 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://conradludgate.com/index.xml" rel="self" type="application/rss+xml"/>
     
     <item>
@@ -13,7 +13,7 @@
       <title>Postgres</title>
       <description>I've always ran postgres on my VPS and always struggled at it. Can I do it better?</description>
       <link>https://conradludgate.com/posts/cnpg</link>
-      <pubDate>Sat, 07 Oct 2023 00:00:00 GMT</pubDate>
+      <pubDate>Sun, 05 Nov 2023 00:00:00 GMT</pubDate>
     </item>
 
   </channel>

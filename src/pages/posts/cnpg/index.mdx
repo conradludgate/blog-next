@@ -1,6 +1,6 @@
 export const meta = {
     title: "Postgres",
-    date: "2023-10-07",
+    date: "2023-11-05",
     tags: ["kubernetes", "postgres"],
     desc: "I've always ran postgres on my VPS and always struggled at it. Can I do it better?",
     imageURL: "https://conradludgate.com/og-image/containers.jpg",
@@ -248,6 +248,34 @@ spec:
       memory: "512Mi"
       cpu: "150m"
 ```
+
+## Updating Postgres
+
+I started my cluster on postgres 15, but I am comfortable running postgres 16 now.
+Before I update the cluster, I will create a backup
+
+```
+apiVersion: postgresql.cnpg.io/v1
+kind: Backup
+metadata:
+  name: shared-cluster-backup
+  namespace: postgres
+spec:
+  cluster:
+    name: shared-cluster
+```
+
+After the backup is completed, all I need to do is update the `imageName` field in the Cluster spec.
+The `unsupervised` update strategy will take over and update all the instances automatically.
+
+Unfortunately, this doesn't work today. See the [discussion](https://github.com/cloudnative-pg/cloudnative-pg/discussions/1176)
+
+```
+The Cluster "shared-cluster" is invalid: spec.imageName: Invalid value: "ghcr.io/cloudnative-pg/postgresql:16.0": can't upgrade between ghcr.io/cloudnative-pg/postgresql:15.3 and ghcr.io/cloudnative-pg/postgresql:16.0
+```
+
+To perform the migration, it's necessary to create a new cluster and use the initdb to pgrestore
+the database.
 
 ## Complaints
 

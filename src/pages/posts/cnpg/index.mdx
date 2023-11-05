@@ -1,3 +1,7 @@
+import Image from "next/image";
+import cpu from "./cpu.png";
+import memory from "./memory.png";
+
 export const meta = {
     title: "Postgres",
     date: "2023-11-05",
@@ -227,9 +231,8 @@ Databases can be pretty heavy. After running my database for a little while,
 I monitored the resource usage in [OpenLens](https://github.com/MuhammedKalkan/OpenLens)
 to get a feel for what I wanted the resource limits to be.
 
-![CPU usage](cpu.png)
-
-![Memory usage](memory.png)
+<Image src={cpu} alt="CPU usage over time" layout="intrinsic" />
+<Image src={memory} alt="Memory usage over time" layout="intrinsic" />
 
 Based on the graphs, I decided to go with
 

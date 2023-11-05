@@ -16,21 +16,5 @@
       <pubDate>Sun, 05 Nov 2023 00:00:00 GMT</pubDate>
     </item>
 
-    <item>
-      <guid>https://conradludgate.com/posts/k8s2</guid>
-      <title>A sequel of deployments</title>
-      <description>I no longer run minikube on my VPS. Why is this?</description>
-      <link>https://conradludgate.com/posts/k8s2</link>
-      <pubDate>Fri, 06 Oct 2023 00:00:00 GMT</pubDate>
-    </item>
-
-    <item>
-      <guid>https://conradludgate.com/posts/k8s</guid>
-      <title>A tale of deployments</title>
-      <description>This is the tale of my many years of deploying apps to the internet. From my humble beginnings to automatic deployment and service management.</description>
-      <link>https://conradludgate.com/posts/k8s</link>
-      <pubDate>Thu, 16 Sep 2021 00:00:00 GMT</pubDate>
-    </item>
-
   </channel>
 </rss>

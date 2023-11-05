@@ -21,4 +21,9 @@ export default withMdx({
 	images: {
 		unoptimized: true,
 	},
+	// i18n: {
+	// 	locales: ["en-GB"],
+	// 	defaultLocale: "en-GB",
+	// },
+	output: 'export',
 });

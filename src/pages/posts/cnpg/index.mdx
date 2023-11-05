@@ -83,18 +83,18 @@ metadata:
 spec:
   instances: 2
 
-  # Example of rolling update strategy:
-  # - unsupervised: automated update of the primary once all
-  #                 replicas have been upgraded (default)
-  # - supervised: requires manual supervision to perform
-  #               the switchover of the primary
+  # version of postgres to use
+  imageName: ghcr.io/cloudnative-pg/postgresql:15.3
+
+  # automated update of the primary once all
+  # replicas have been upgraded
   primaryUpdateStrategy: unsupervised
 
   # Require 4Gi of space
   storage:
     size: 4Gi
 
-  # metrics
+  # prometheus metrics
   monitoring:
     enablePodMonitor: true
 
@@ -103,6 +103,9 @@ spec:
     barmanObjectStore:
       destinationPath: "s3://my-bucket/postgres"
       s3Credentials:
+        region:
+          name: backup-aws-creds
+          key: AWS_REGION
         accessKeyId:
           name: backup-aws-creds
           key: ACCESS_KEY_ID
@@ -139,6 +142,8 @@ spec:
 
 After applying this, my bucket in S3 starts receiving WAL objects.
 
+## Bootstrap
+
 I already had an existing database I wanted to import, adding
 
 ```yaml
@@ -166,3 +171,94 @@ spec:
 worked flawlessly to import my data.
 Note, this is an 'offline' import so it's best to stop the service that is
 writing data into this DB
+
+## Recovery
+
+A backup without tests is just wasted storage.
+Thankfully, CloudNativePG has good [documentation on recovery practices](https://cloudnative-pg.io/documentation/1.21/recovery/).
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: shared-cluster-backup-test
+  namespace: postgres
+spec:
+  instances: 1
+
+  # It is important that this image matches the
+  # image the original cluster uses.
+  imageName: ghcr.io/cloudnative-pg/postgresql:15.3
+
+  # Boostrap in recover mode
+  bootstrap:
+    recovery:
+      source: clusterBackup
+
+  externalClusters:
+    - name: clusterBackup
+      barmanObjectStore:
+        # name of the original cluster - can be omitted
+        # if the cluster names are the same
+        serverName: "shared-cluster"
+
+        destinationPath: "s3://my-bucket/postgres"
+        s3Credentials:
+          region:
+            name: backup-aws-creds
+            key: AWS_REGION
+          accessKeyId:
+            name: backup-aws-creds
+            key: ACCESS_KEY_ID
+          secretAccessKey:
+            name: backup-aws-creds
+            key: ACCESS_SECRET_KEY
+        wal:
+          compression: "bzip2"
+          encryption: "AES256"
+        data:
+          compression: "bzip2"
+          encryption: "AES256"
+```
+
+## Resource limits
+
+Databases can be pretty heavy. After running my database for a little while,
+I monitored the resource usage in [OpenLens](https://github.com/MuhammedKalkan/OpenLens)
+to get a feel for what I wanted the resource limits to be.
+
+![CPU usage](cpu.png)
+
+![Memory usage](memory.png)
+
+Based on the graphs, I decided to go with
+
+```yaml
+spec:
+  postgresql:
+    parameters:
+      # should be 25% the memory limit
+      shared_buffers: "128MB"
+
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "50m"
+    limits:
+      memory: "512Mi"
+      cpu: "150m"
+```
+
+## Complaints
+
+There's a feature I'd really like, and [I tried to implement it](https://github.com/conradludgate/cloudnative-pg/tree/many-database-per-cluster), but I've given up for now.
+CloudNativePG has made the decision that there should only be one database per cluster.
+I would have preferred a construction where you run one cluster but can create many databases
+in different namespaces.
+
+The idea is that you would create your cluster definition, this will handle the `initdb` settings,
+the backup settings, the replication settings, superuser etc. On top f that, there is a database CRD that
+will create the new application user and database that was requested.
+
+It's true that having more clusters would scale better, but I'm not looking to scale. I'm looking
+to reduce my memory and CPU usage.

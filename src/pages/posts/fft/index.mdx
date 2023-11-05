@@ -26,13 +26,13 @@ If you're not so keen on videos, or don't have the time, I'll try to briefly exp
 
 Before covering FFT, let's first talk about what the Fourier Transform is. It takes an input from 'signal space' and converts it to 'frequency space'. What does that mean? Take a look at the following graphs
 
-<Image src={pure} alt="pure sine wave and frequency" layout="intrinsic" />
+<Image src={pure} alt="pure sine wave and frequency" sizes="100vw" style={{width: "100%", height:"auto"}} />
 
 This shows a simple sine wave, and its frequency can be seen in the spike in the frequency space graph, not so interesting yet.
 
 However, if we were to make our signal a bit more complex, by layering 3 different sine waves on top of each other, we see that the Fourier Transform is still able to extract the unique frequencies
 
-<Image src={noisy} alt="noisy sine wave and frequency" layout="intrinsic" />
+<Image src={noisy} alt="noisy sine wave and frequency" sizes="100vw" style={{width: "100%", height:"auto"}} />
 
 There's a lot more that the Fourier Transform can do, check out the [wikipedia article](https://en.wikipedia.org/wiki/Fourier_transform) to learn more.
 
@@ -42,13 +42,13 @@ The Fast Fourier Transform is a very efficient algorithm to compute the Discrete
 
 I've skipped a bit about the fourier transform, but it's defined as the following complex integral.
 
-<Image src={ft} alt="fourier transform integral" layout="intrinsic" />
+<Image src={ft} alt="fourier transform integral" sizes="100vw" style={{width: "100%", height:"auto"}} />
 
 This is a continuous operation and impractical to work with real world data in a computer. Instead, we want a version which works on discrete data.
 
 Instead, we can turn the integral into a finite summation
 
-<Image src={dft} alt="discrete fourier transform" layout="intrinsic" />
+<Image src={dft} alt="discrete fourier transform" sizes="100vw" style={{width: "100%", height:"auto"}} />
 
 and the same properties will apply. The issue with this formula is that it will have a complexity of `O(n^2)`. This means that the run time will quadruple as the input length doubles. This is a big deal for sound processing. Typical audio is sampled at 44,100 times per second. This would need 1,944,810,000 calculations for analysing just a second of audio.
 

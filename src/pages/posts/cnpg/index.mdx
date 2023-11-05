@@ -257,7 +257,7 @@ spec:
 I started my cluster on postgres 15, but I am comfortable running postgres 16 now.
 Before I update the cluster, I will create a backup
 
-```
+```yaml
 apiVersion: postgresql.cnpg.io/v1
 kind: Backup
 metadata:
@@ -273,7 +273,7 @@ The `unsupervised` update strategy will take over and update all the instances a
 
 Unfortunately, this doesn't work today. See the [discussion](https://github.com/cloudnative-pg/cloudnative-pg/discussions/1176)
 
-```
+```text
 The Cluster "shared-cluster" is invalid: spec.imageName: Invalid value: "ghcr.io/cloudnative-pg/postgresql:16.0": can't upgrade between ghcr.io/cloudnative-pg/postgresql:15.3 and ghcr.io/cloudnative-pg/postgresql:16.0
 ```
 

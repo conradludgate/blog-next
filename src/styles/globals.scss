@@ -1,33 +1,28 @@
 @import "themes/light.scss", "themes/dark.scss";
 
 @font-face {
-  font-family: Noto Sans;
-  src: url(/fonts/NotoSans-Regular.woff2) format("woff2"), url(/fonts/NotoSans-Regular.woff) format("woff");
+  font-family: "Noto Serif Regular";
+  src: url("/fonts/NotoSerif.woff2") format("woff2"),  url("/fonts/NotoSerif.woff") format("woff");
+  font-display: fallback;
+}
+
+@font-face {
+  font-family: "Noto Sans";
+  src: url("/fonts/NotoSans-Regular.woff2") format("woff2"), url("/fonts/NotoSans-Regular.woff") format("woff");
   font-weight: 400;
   font-display: fallback;
 }
+
 @font-face {
-  font-family: Noto Sans;
-  src: url(/fonts/NotoSans-Italic.woff2) format("woff2"), url(/fonts/NotoSans-Italic.woff) format("woff");
+  font-family: "Noto Sans";
+  src: url("/fonts/NotoSans-Italic.woff2") format("woff2"), url("/fonts/NotoSans-Italic.woff") format("woff");
   font-weight: 400;
   font-style: italic;
   font-display: fallback;
 }
-@font-face {
-  font-family: Noto Serif;
-  src: url(/fonts/NotoSerif-SemiBold.woff2) format("woff2"), url(/fonts/NotoSerif-SemiBold.woff) format("woff");
-  font-weight: 600;
-  font-display: fallback;
-}
-@font-face {
-  font-family: Noto Serif;
-  src: url(/fonts/NotoSerif-Bold.woff2) format("woff2"), url(/fonts/NotoSerif-Bold.woff) format("woff");
-  font-weight: 700;
-  font-display: fallback;
-}
 
 h1, h2, h3, h4, h5, h6 {
-  font-family: noto serif,segoe ui,helvetica neue,Helvetica,Roboto,FreeSans,serif;
+  font-family: "Noto Serif Regular", serif;
   font-weight: 600;
 }
 
@@ -35,7 +30,7 @@ html,
 body {
   padding: 0;
   margin: 0;
-  font-family: noto sans, segoe ui, helvetica neue, Helvetica, Roboto, FreeSans, sans-serif;
+  font-family: "Noto Sans", sans-serif;
 
   background-color: var(--color-bg);
   color: var(--color-fg);

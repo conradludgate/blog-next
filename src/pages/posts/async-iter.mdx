@@ -203,7 +203,7 @@ Wow! All it does is read some bytes, decode the frames, and then repeat until th
 Why is it so complicated? Your first instinct might be to blame the fact that we must use `poll`ing and not `.await`.
 
 However, if you look closely at this implementation, we only `poll` the reader in one place. If we were to replace that with
-`await`, the implementation would look almost identical. Here's a diff
+`await`, the implementation would look almost identical. Here is a diff:
 
 
 ```diff

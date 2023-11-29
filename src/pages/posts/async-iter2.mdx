@@ -16,7 +16,7 @@ how they might look as async functions.
 
 ## BufferedOrdered
 
-<https://github.com/conradludgate/futures-buffered/blob/cf4878fccf1b680bd4549bf479d13fe4ddfca8d3/src/buffered/ordered.rs#L24-L80>
+[source](https://github.com/conradludgate/futures-buffered/blob/cf4878fccf1b680bd4549bf479d13fe4ddfca8d3/src/buffered/ordered.rs#L24-L80)
 
 `BufferedOrdered` is a stream method which, given a stream of futures, can execute multiple futures in parallel.
 
@@ -99,7 +99,7 @@ Therefore, I consider this effectively impossible to implement using safe rust.
 
 ## Throttle
 
-<https://github.com/conradludgate/tokio/blob/88b1eb54fb66461b9f3524f4b5316241a019279a/tokio-stream/src/stream_ext/throttle.rs#L68-L92>
+[source](https://github.com/conradludgate/tokio/blob/88b1eb54fb66461b9f3524f4b5316241a019279a/tokio-stream/src/stream_ext/throttle.rs#L68-L92)
 
 Throttle imposes a limit on how often items can be released from a stream.
 
@@ -147,9 +147,9 @@ This one has genuinely simplified things. We no longer need to keep track of whe
 
 ## PeakEwmaDiscover
 
-<https://github.com/conradludgate/tower/blob/6f3050614f29e70bf9fa18c4415174212b156cce/tower/src/load/peak_ewma.rs#L189-L214>
+[source](https://github.com/conradludgate/tower/blob/6f3050614f29e70bf9fa18c4415174212b156cce/tower/src/load/peak_ewma.rs#L189-L214)
 
-This seems like a simple one. `Discover` is essentially a stream of it's own kind. Let's assume this is also async.
+This seems like a simple one. `Discover` is essentially a stream of its own kind. Let's assume this is also async.
 
 ```rust
 impl<D, C> AsyncIterator for PeakEwmaDiscover<D, C>

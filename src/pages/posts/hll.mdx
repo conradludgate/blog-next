@@ -273,3 +273,55 @@ This does assume perfect compression, and only accounts for a single label.
 
 Assuming our use case, with at most 6 active pods per region, 8 regions, and 12 different label groupings, we would expect to accumulate
 only 75MiB of data a day. Even if the compression was not good and the size was double, this would still be insignificant compared to the scale of our logs.
+
+## Problems
+
+### Exploitation
+
+If the hash you use is known, and the values are not validated, then these values can be manipulated. Especially if the hash
+is fast and non-cryptographic, you can easily brute force a set of inputs that have an arbitrary long string of starting 0s.
+
+With xxh3, it took me only 30 seconds to calculate the following set of 32 strings that inflate the estimate to 4 billion.
+
+```rust
+hash("97fcd45700000000") = 0x00000008fff2b3a0 (runs = 29, index = 0)
+hash("3b84012600000000") = 0x0000000630a3ade1 (runs = 30, index = 1)
+hash("0561ee2100000000") = 0x00000065abfe9322 (runs = 26, index = 2)
+hash("3bf3532c00000000") = 0x0000000b40f518e3 (runs = 29, index = 3)
+hash("42edd01301000000") = 0x00000009c896d104 (runs = 29, index = 4)
+hash("6431faeb00000000") = 0x0000003e661131a5 (runs = 27, index = 5)
+hash("82af080900000000") = 0x000000203c3d2366 (runs = 27, index = 6)
+hash("caca5f6d00000000") = 0x0000001a71799b27 (runs = 28, index = 7)
+hash("cd60d07400000000") = 0x0000001c4d790288 (runs = 28, index = 8)
+hash("45d416ec00000000") = 0x000000444851ee69 (runs = 26, index = 9)
+hash("a8c9ad2d00000000") = 0x0000000bd1b05a6a (runs = 29, index = 10)
+hash("f811c46e00000000") = 0x0000000efd2a538b (runs = 29, index = 11)
+hash("613a720000000000") = 0x00000000fee10bec (runs = 33, index = 12)
+hash("75eeee1901000000") = 0x00000015bb46c3ad (runs = 28, index = 13)
+hash("c62d825c00000000") = 0x0000000e241e2bae (runs = 29, index = 14)
+hash("0df57aad00000000") = 0x0000000c4309320f (runs = 29, index = 15)
+hash("9655452d00000000") = 0x0000005c438ab690 (runs = 26, index = 16)
+hash("485a6ef300000000") = 0x00000028c48e82f1 (runs = 27, index = 17)
+hash("8828f68a00000000") = 0x000000068209d112 (runs = 30, index = 18)
+hash("f023680700000000") = 0x00000005a3dec373 (runs = 30, index = 19)
+hash("feb0490500000000") = 0x00000001e438d554 (runs = 32, index = 20)
+hash("a6460e5e00000000") = 0x00000023d94805d5 (runs = 27, index = 21)
+hash("e80d018300000000") = 0x0000000f3e345bf6 (runs = 29, index = 22)
+hash("fd77837900000000") = 0x000000015bbad537 (runs = 32, index = 23)
+hash("60a08d6400000000") = 0x0000002362a14a78 (runs = 27, index = 24)
+hash("0ba6648200000000") = 0x0000000823b46259 (runs = 29, index = 25)
+hash("827be81200000000") = 0x00000065ab790e1a (runs = 26, index = 26)
+hash("8c74d54400000000") = 0x0000002629ddb47b (runs = 27, index = 27)
+hash("06bb831501000000") = 0x0000000c6ef5533c (runs = 29, index = 28)
+hash("5d19be9f00000000") = 0x00000016ebf5547d (runs = 28, index = 29)
+hash("e5c2c40000000000") = 0x0000005d24f55a1e (runs = 26, index = 30)
+hash("6f6d2b9800000000") = 0x00000008459a519f (runs = 29, index = 31)
+```
+
+Either the set of inputs must be validated, or you must use a secret seed for the hash.
+
+### Missed entries
+
+It's possible with the current implementation I shared to lose scraped values, notably the `swap(0)` part. To combat this,
+it would be best to accumulate in memory the last 5 or 10 scrapes and return the max of all of them.
+That way every 5 scrapes still contain all values and you still get a decent temporal resolution of 5x the scrape interval. (~75seconds).

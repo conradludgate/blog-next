@@ -21,7 +21,7 @@ run a binary search over several deployment windows, but I wanted to make an edu
 
 Unfortunately, it wasn't easy to count the distinct users. We log all user sessions into Grafana Loki, so I put together this query as a quick hack
 
-```
+```promql
 count(
 	sum(
         count_over_time(
@@ -36,12 +36,13 @@ count(
 
 I'm not going to explain how the query works, but I will demonstrate how bad it is by quoting the stats while running this range over 24 hours:
 
-| -------------------------- | --------- |
-| bytes processed per second | 48.2 GB/s |
-| lines processed per second | 188124380 |
-| total bytes processed      | 520 GB |
+| label                      | value      |
+|----------------------------|------------|
+| bytes processed per second | 48.2 GB/s  |
+| lines processed per second | 188124380  |
+| total bytes processed      | 520 GB     |
 | total lines processed      | 2027261473 |
-| exec time                  | 10.8 s |
+| exec time                  | 10.8 s     |
 
 Kudos to Grafana Cloud for managing to process 48GB/s, but this is not a good solution. I got my answer though so I guess that's it?
 
@@ -53,7 +54,7 @@ How many users see this specific error? etc.
 HyperLogLog is a probabilistic estimate for the cardinality of a set. It's surprisingly accurate.
 
 The idea: a hash of the user ID would be an effectively random string of bits
-```
+```rust
 hash("conradludgate") = 0b0000111000000110100000101101101010101110010010000101101111001100
 ```
 
@@ -119,8 +120,8 @@ It might be easier to see patterns if we also sort them:
 1110010111110100011001111001101101100001001110001011100010000110
 ```
 
-Exactly half of all the hash outputs start with a `1` (13/26).
-About a quarter of all the hash outputs start with `01` (7/26).
+Exactly half of all the hash outputs start with a `1` (13/26). <br />
+About a quarter of all the hash outputs start with `01` (7/26). <br />
 A little over an eighth of all the hash outputs start with `001` (4/26).
 
 This is a property of a uniformly random output. Each bit has a 1/2 chance of being a 0.
@@ -221,19 +222,19 @@ impl<const N: usize> HyperLogLog<N> {
 This implementation of HyperLogLog collector can be added into a [prometheus collector trait](https://github.com/neondatabase/neon/blob/16717ff13a3db7210c064521f72442ed7379f3d5/libs/metrics/src/hll.rs) as multiple gauges.
 
 ```
-my_metrics_total_hll{hll_shard=0} = "5"
-my_metrics_total_hll{hll_shard=1} = "10"
-my_metrics_total_hll{hll_shard=2} = "7"
-my_metrics_total_hll{hll_shard=3} = "8"
-my_metrics_total_hll{hll_shard=4} = "5"
-my_metrics_total_hll{hll_shard=5} = "3"
-my_metrics_total_hll{hll_shard=6} = "1"
-my_metrics_total_hll{hll_shard=7} = "2"
+my_metrics_total_hll{hll_shard=0} = 5
+my_metrics_total_hll{hll_shard=1} = 10
+my_metrics_total_hll{hll_shard=2} = 7
+my_metrics_total_hll{hll_shard=3} = 8
+my_metrics_total_hll{hll_shard=4} = 5
+my_metrics_total_hll{hll_shard=5} = 3
+my_metrics_total_hll{hll_shard=6} = 1
+my_metrics_total_hll{hll_shard=7} = 2
 ```
 
 When scraped into prometheus, it can be aggregated using the following query:
 
-```
+```promql
 1 / (
     sum (
         2 ^ -(

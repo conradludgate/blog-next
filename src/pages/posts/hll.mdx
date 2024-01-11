@@ -1,0 +1,259 @@
+export const meta = {
+  title: "HyperLogLog and prometheus",
+  date: "2024-01-11",
+  tags: ["prometheus", "metrics", "rust"],
+  desc: "HyperLogLog is a compressed 'sketch' estimating the cardinality of a set. It can be turned into a time-series",
+  imageURL: "https://conradludgate.com/og-image/dashboard.jpg",
+};
+
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+    return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+I've known about HyperLogLog for a while, but I never found a use in my day-to-day work until recently.
+
+## Problem
+
+At my day job, I wanted to estimate the number of users that connect in any given hour window in each region.
+I wanted to determine the size that a new cache should be. Now, we could have some dynamic cache scaling or
+run a binary search over several deployment windows, but I wanted to make an educated guess first.
+
+Unfortunately, it wasn't easy to count the distinct users. We log all user sessions into Grafana Loki, so I put together this query as a quick hack
+
+```
+count(
+	sum(
+        count_over_time(
+            {service="xyz"}
+                |= "request from"
+                |  regexp `user=(?P<user>[^\,\}]+)`
+            [1h]
+	    )
+    ) by (region, user)
+) without (user)
+```
+
+I'm not going to explain how the query works, but I will demonstrate how bad it is by quoting the stats while running this range over 24 hours:
+
+| -------------------------- | --------- |
+| bytes processed per second | 48.2 GB/s |
+| lines processed per second | 188124380 |
+| total bytes processed      | 520 GB |
+| total lines processed      | 2027261473 |
+| exec time                  | 10.8 s |
+
+Kudos to Grafana Cloud for managing to process 48GB/s, but this is not a good solution. I got my answer though so I guess that's it?
+
+Well, this is a re-occurring problem. I frequently need to estimate the count along different metrics. How many users are using this API?
+How many users see this specific error? etc.
+
+## HyperLogLog
+
+HyperLogLog is a probabilistic estimate for the cardinality of a set. It's surprisingly accurate.
+
+The idea: a hash of the user ID would be an effectively random string of bits
+```
+hash("conradludgate") = 0b0000111000000110100000101101101010101110010010000101101111001100
+```
+
+Let's hash all the letters of the alphabet and see if we spot any patterns.
+
+```
+0110001100101000000011101110100101101011011111001100010000000111
+0100000011110011110001101111101101100110110011000000001100000100
+1100111000100110000011001100101010001111011000110001100101001101
+0111110100100000100011001000000111101000001000110110100110010101
+1000000011101001001001010010011011100110110111011111001001000011
+1001011100010101000001011011011111110110100010110000001000110101
+1101000000001101110111100101100111001010110011100101001011000100
+1001100111001110001011110011000100111110101101100000101000110101
+0111000001100100100110011100100001000000111111000111011001010101
+1110010111110100011001111001101101100001001110001011100010000110
+1100101111010000111000101101111110010100010111100010100111010011
+1010011111010001011000011000001000100011000000001101100011101101
+1110001111011000011010011111001001100111000110100110010100001110
+1000001011100000000101000110101101000010101110001100110011000011
+0011110001101110110000010001011010001011110000110110111100000110
+0101110100110110100010101010101010110001000110000010001011110101
+0111010100000111110011111110001111001010010110101101011010100010
+1001011011110001110100110101010000010001001111110101100101001100
+0010000101110011000101111001100011000100011111100000110001101100
+1010000001111110001100001110100000010011111010010011010110111001
+0001011011000110011100011100111100101010100110001001011000110001
+0010101100000111010000101110000100101011011000011110101001001100
+0010001001100001111000101011010010001011110101000100010101001101
+0001100101101011001000011101100011011110110110101110001110111101
+1101111101001101001100100110011111100010100111001101110000011011
+0111111101011110010100110110010100010110101010110100001101111001
+```
+
+It might be easier to see patterns if we also sort them:
+
+```
+0001011011000110011100011100111100101010100110001001011000110001
+0001100101101011001000011101100011011110110110101110001110111101
+0010000101110011000101111001100011000100011111100000110001101100
+0010001001100001111000101011010010001011110101000100010101001101
+0010101100000111010000101110000100101011011000011110101001001100
+0011110001101110110000010001011010001011110000110110111100000110
+0100000011110011110001101111101101100110110011000000001100000100
+0101110100110110100010101010101010110001000110000010001011110101
+0110001100101000000011101110100101101011011111001100010000000111
+0111000001100100100110011100100001000000111111000111011001010101
+0111010100000111110011111110001111001010010110101101011010100010
+0111110100100000100011001000000111101000001000110110100110010101
+0111111101011110010100110110010100010110101010110100001101111001
+1000000011101001001001010010011011100110110111011111001001000011
+1000001011100000000101000110101101000010101110001100110011000011
+1001011011110001110100110101010000010001001111110101100101001100
+1001011100010101000001011011011111110110100010110000001000110101
+1001100111001110001011110011000100111110101101100000101000110101
+1010000001111110001100001110100000010011111010010011010110111001
+1010011111010001011000011000001000100011000000001101100011101101
+1100101111010000111000101101111110010100010111100010100111010011
+1100111000100110000011001100101010001111011000110001100101001101
+1101000000001101110111100101100111001010110011100101001011000100
+1101111101001101001100100110011111100010100111001101110000011011
+1110001111011000011010011111001001100111000110100110010100001110
+1110010111110100011001111001101101100001001110001011100010000110
+```
+
+Exactly half of all the hash outputs start with a `1` (13/26).
+About a quarter of all the hash outputs start with `01` (7/26).
+A little over an eighth of all the hash outputs start with `001` (4/26).
+
+This is a property of a uniformly random output. Each bit has a 1/2 chance of being a 0.
+Because each bit should have no relationship to the last, they are mutually exclusive.
+To calculate probabilities of two mutually exclusive events you can multiply their individual
+probabilities. So getting `01...` would be `1/2 * 1/2 = 1/4` and getting `001` would be `1/2 * 1/2 * 1/2 = 1/8`.
+Rephrasing this statement, after 8 distinct hashes, we expect one of them to have `001` at the start.
+After 64 distinct hashes, we expect one of them to have `000001` at the start.
+After 65536 distinct hashes, we expect one of them to have `0000000000000001` at the start.
+
+What we can then do is take the maximum length run we find and use that as our cardinality estimate. If we see a `0000000000000001` we
+can count the 15 zeroes. Our estimate for how many elements we have hashes is then on the order of `2^(15+1) = 65536` elements.
+
+Being stuck to a single power of two for our estimate is quite limiting though, and we have the chance to be unlucky and get 15 zeroes on
+our first hash. To alleviate this issue, we can store a few different counts. Use the last few bits of the hash output as an index into
+a specific shard, and then store the max count we observe in that shard. Eg, taking the hash of my name:
+
+```
+0000111000000110100000101101101010101110010010000101101111001100
+^^^^ run of 4                                               ^^^^ index 12
+
+shards[12] = max(shards[12], 4);
+```
+
+To calculate our estimate, we can get the average estimate of all the buckets. In this case, the harmonic mean performs the most accurately.
+
+```
+1 / shards.map(|run_len| 2^-(run_len + 1)).sum()
+```
+
+## Insertion is Commutative and Associative
+
+A very nice feature of the insert operation is that it's both commutative and associative. What that means is that
+
+```
+(((a + b) + c) + d)
+```
+
+can be rewritten as
+
+```
+(a + b) + (c + d)
+```
+
+This means you do not have to have a single linear stream to perform the aggregation. You can have multiple streams pre-aggregate this HyperLogLog
+estimate, and then merge them later. Merging is performed simply by taking the max of each shard.
+
+### HLL for distributed systems
+
+Because you can merge the HLL streams from multiple places, and get consistent results, there needs to be no synchronisation
+of the state between services. Each service can maintain its own HLL and publish it. Later, a separate service can collect all the HLL states
+and merge them.
+
+### HLL over time
+
+We don't even benefit just from distributing this state across space, but you can distribute it across time. This has some very neat implications.
+If you regularly reset the counters after publishing them, you can merge a specific time range and analyze that time range specifically.
+
+For instance, Every 5 minutes, publish the current state and reset. To analyze the last hour, you can take the last 12 state samples and merge them.
+
+## Prometheus Rust implementation
+
+```rust
+#[derive(Clone)]
+pub struct HyperLogLog<const N: usize> {
+    core: Arc<HyperLogLogCore<N>>,
+}
+
+struct HyperLogLogCore<const N: usize> {
+    shards: [AtomicU8; N],
+}
+
+impl<const N: usize> HyperLogLog<N> {
+    pub fn measure(&self, item: &impl Hash) {
+        self.record(BuildHasherDefault::<xxh3::Hash64>::default().hash_one(item));
+    }
+
+    fn record(&self, hash: u64) {
+        assert!(N.is_power_of_two());
+        let p = N.ilog2() as u8;
+        let j = hash & (N as u64 - 1); // N - 1 gets a mask of the last `p` bits since N is a power of two.
+        let rho = hash.leading_zeros() as u8 + 1;
+        self.core.shards[j as usize].fetch_max(rho, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn collect(&self) -> Vec<u8> {
+        self.core
+            .shards
+            .iter()
+            .map(|shard| {
+                shard.swap(0, std::sync::atomic::Ordering::Relaxed)
+            })
+            .collect()
+    }
+}
+```
+
+This implementation of HyperLogLog collector can be added into a [prometheus collector trait](https://github.com/neondatabase/neon/blob/16717ff13a3db7210c064521f72442ed7379f3d5/libs/metrics/src/hll.rs) as multiple gauges.
+
+```
+my_metrics_total_hll{hll_shard=0} = "5"
+my_metrics_total_hll{hll_shard=1} = "10"
+my_metrics_total_hll{hll_shard=2} = "7"
+my_metrics_total_hll{hll_shard=3} = "8"
+my_metrics_total_hll{hll_shard=4} = "5"
+my_metrics_total_hll{hll_shard=5} = "3"
+my_metrics_total_hll{hll_shard=6} = "1"
+my_metrics_total_hll{hll_shard=7} = "2"
+```
+
+When scraped into prometheus, it can be aggregated using the following query:
+
+```
+1 / (
+    sum (
+        2 ^ -(
+            # HLL merge operation
+            max (my_metrics_total_hll{}) by (hll_shard, region)
+        )
+    ) without (hll_shard)
+)
+* alpha
+* shards_count
+* shards_count
+```
+
+## Performance
+
+Running a 32 shard version in our a preview environment, running this over a days worth of 15s samples, it takes only 150ms.
+I haven't yet measured how much storage this takes, but a quick estimate:
+
+`6 bits per number * 32 numbers per sample * 4 samples per minute * 1440 minutes per day = 135KiB`.
+This does assume perfect compression, and only accounts for a single label.
+
+Assuming our use case, with at most 6 active pods per region, 8 regions, and 12 different label groupings, we would expect to accumulate
+only 75MiB of data a day. Even if the compression was not good and the size was double, this would still be insignificant compared to the scale of our logs.

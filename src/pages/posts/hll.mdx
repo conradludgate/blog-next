@@ -36,13 +36,28 @@ count(
 
 I'm not going to explain how the query works, but I will demonstrate how bad it is by quoting the stats while running this range over 24 hours:
 
-| label                      | value      |
-|----------------------------|------------|
-| bytes processed per second | 48.2 GB/s  |
-| lines processed per second | 188124380  |
-| total bytes processed      | 520 GB     |
-| total lines processed      | 2027261473 |
-| exec time                  | 10.8 s     |
+<table>
+    <tr>
+        <td>bytes processed per second</td>
+        <td>48.2 GB/s</td>
+    </tr>
+    <tr>
+        <td>lines processed per second</td>
+        <td>188124380</td>
+    </tr>
+    <tr>
+        <td>total bytes processed</td>
+        <td>520 GB</td>
+    </tr>
+    <tr>
+        <td>total lines processed</td>
+        <td>2027261473</td>
+    </tr>
+    <tr>
+        <td>exec time</td>
+        <td>10.8 s</td>
+    </tr>
+</table>
 
 Kudos to Grafana Cloud for managing to process 48GB/s, but this is not a good solution. I got my answer though so I guess that's it?
 

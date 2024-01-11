@@ -169,7 +169,7 @@ To calculate our estimate, we can get the average estimate of all the buckets. I
 
 ## Insertion is Commutative and Associative
 
-A very nice feature of the insert operation is that it's both commutative and associative. What that means is that
+A very nice feature of the insert operation is that it's both associative. What that means is that
 
 ```
 (((a + b) + c) + d)
@@ -181,7 +181,28 @@ can be rewritten as
 (a + b) + (c + d)
 ```
 
-This means you do not have to have a single linear stream to perform the aggregation. You can have multiple streams pre-aggregate this HyperLogLog
+It is also commutative. This means that
+
+```
+(a + b) + (c + b)
+```
+
+can be re-written as
+
+```
+(a + c) + (b + b)
+```
+
+Considering that the hash of b is always the same, the length of the runs is always the same and this therefore will not double count. It is equal
+to
+
+```
+a + c + b
+```
+
+containing only the 3 inserted values.
+
+What these two properties together mean is that you do not have to have a single linear stream to perform the aggregation. You can have multiple streams pre-aggregate this HyperLogLog
 estimate, and then merge them later. Merging is performed simply by taking the max of each shard.
 
 ### HLL for distributed systems

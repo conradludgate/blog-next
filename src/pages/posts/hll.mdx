@@ -75,7 +75,7 @@ hash("conradludgate") = 0b000011100000011010000010110110101010111001001000010110
 
 Let's hash all the letters of the alphabet and see if we spot any patterns.
 
-```
+```text
 0110001100101000000011101110100101101011011111001100010000000111
 0100000011110011110001101111101101100110110011000000001100000100
 1100111000100110000011001100101010001111011000110001100101001101
@@ -106,7 +106,7 @@ Let's hash all the letters of the alphabet and see if we spot any patterns.
 
 It might be easier to see patterns if we also sort them:
 
-```
+```text
 0001011011000110011100011100111100101010100110001001011000110001
 0001100101101011001000011101100011011110110110101110001110111101
 0010000101110011000101111001100011000100011111100000110001101100
@@ -141,7 +141,7 @@ A little over an eighth of all the hash outputs start with `001` (4/26).
 
 This is a property of a uniformly random output. Each bit has a 1/2 chance of being a 0.
 Because each bit should have no relationship to the last, they are mutually exclusive.
-To calculate probabilities of two mutually exclusive events you can multiply their individual
+To calculate the probabilities of two mutually exclusive events occuring you can multiply their individual
 probabilities. So getting `01...` would be `1/2 * 1/2 = 1/4` and getting `001` would be `1/2 * 1/2 * 1/2 = 1/8`.
 Rephrasing this statement, after 8 distinct hashes, we expect one of them to have `001` at the start.
 After 64 distinct hashes, we expect one of them to have `000001` at the start.
@@ -169,25 +169,19 @@ To calculate our estimate, we can get the average estimate of all the buckets. I
 
 ## Insertion is Commutative and Associative
 
-A very nice feature of the insert operation is that it's both associative. What that means is that
+A very nice feature of the insert operation is that it's associative. What that means is that
 
 ```
-(((a + b) + c) + d)
+(((a + b) + c) + b)
 ```
 
 can be rewritten as
 
 ```
-(a + b) + (c + d)
-```
-
-It is also commutative. This means that
-
-```
 (a + b) + (c + b)
 ```
 
-can be re-written as
+It is also commutative. This means that it can be further simplified as
 
 ```
 (a + c) + (b + b)

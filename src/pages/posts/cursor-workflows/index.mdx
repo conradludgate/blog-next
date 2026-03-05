@@ -2,7 +2,7 @@ export const meta = {
   title: "How I use Cursor",
   date: "2026-03-05",
   tags: ["dev", "rust", "llm", "cursor"],
-  desc: "I used to avoid LLM tooling entirely. Then I got stuck. Here's how I use Cursor now — as a second brain, spec coverage tool, and TDD partner.",
+  desc: "How I use Cursor — second brain, spec coverage, TDD.",
   imageURL: "https://conradludgate.com/og-image/ferris.png",
 };
 
@@ -44,7 +44,7 @@ employer covers it, but I think it's worth being upfront about the cost
 since whether it's worth it depends entirely on how you use it.
 
 Here's how it's been working for me: as a knowledge management system, a
-spec coverage workflow, and a TDD partner.
+spec coverage workflow, and a TDD assistant.
 
 ## The Second Brain
 
@@ -253,7 +253,7 @@ $ tracey uncovered
 ```
 
 [James Munns posted about
-it](https://bsky.app/profile/jamesmunns.com/post/3mfwyqgbrjk2s)
+it](https://bsky.app/profile/jamesmunns.com/post/3mfz3u2bmmk2a)
 recently — "absolutely cooking", "this is *crazy* good." It has an LSP
 that lets you hover over annotations and jump to the spec, and in the
 replies someone made an observation that captures this perfectly: "having
@@ -314,23 +314,6 @@ verification, then write a failing test with the appropriate `r[verify]`
 annotation, then implement to make it pass. It's not pure
 red-green-refactor, but the spec acts as the "red" — it tells me what's
 missing before anything gets written.
-
-### Parallel Exploration
-
-For larger changes where there are multiple valid approaches, I rely
-heavily on git worktrees with parallel subagents. My strategy is to
-create a branch and worktree for each approach, copy the `target/`
-directory (APFS cloning makes this instant on macOS), and spawn a
-subagent in each worktree to explore the option independently. I have a
-supervisor skill for this — the worktree-code-writer — that breaks the
-task into milestones and delegates to subagents without reading their
-code directly. It just reviews their status summaries, steers with short
-corrections, and reports back to me. The supervisor never implements; it
-only directs.
-
-This has been useful for refactors where the cleanest direction isn't
-obvious. I just let three agents try three approaches, review the diffs,
-and pick the winner or cherry-pick ideas from each.
 
 ## Keeping LLMs Honest
 

@@ -1,0 +1,374 @@
+export const meta = {
+  title: "How I use Cursor",
+  date: "2026-03-05",
+  tags: ["dev", "rust", "llm", "cursor"],
+  desc: "How I use Cursor — second brain, spec coverage, TDD.",
+  imageURL: "https://conradludgate.com/og-image/ferris.png",
+};
+
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+  return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+Up until recently, LLM tooling wasn't something that interested me.
+Software written with it felt mediocre, and the whole thing seemed to
+encourage lazy thinking. That opinion hasn't entirely changed — but my
+stance on whether it *has* to be that way has.
+
+What happened was [Filament](https://github.com/conradludgate/filament),
+a side project where the design was clear in my head but nothing was
+coming out. ADHD-induced burnout — the kind where you stare at the
+editor for an hour and produce nothing. I threw Cursor at it out of
+desperation, just to get *something* working, and I planned to take it
+from there. That didn't happen. [Instead it took
+over](https://bsky.app/profile/conrad.cafe/post/3mfissyb7ss2y) — within
+two weeks, I wasn't writing a single line of code by hand anymore, just
+reviewing and steering plans. It was genuinely addictive for a while,
+the loop of prompt, wait, review, prompt again. I was working evenings and weekends on
+things that weren't even urgent, just because firing off a prompt before
+dinner and reviewing the result after was so easy.
+
+One thing I want to be clear about though: the designs are still mine. I
+haven't outsourced my thinking — if anything I'm thinking harder,
+because now I have a fast executor that I need to direct properly. What
+Cursor actually provides is a speed boost, a rubber duck debugger that
+can transcribe my investigation sessions and recall them later. My ADHD
+makes short-term memory a real struggle, and having something hold
+context across sessions compensates for that in a way nothing else has.
+Last month my Cursor usage hit $240, which is expensive even though my
+employer covers it, but I think it's worth being upfront about the cost
+since whether it's worth it depends entirely on how you use it.
+
+Here's how it's been working for me: as a knowledge management system, a
+spec coverage workflow, and a TDD assistant.
+
+## The Second Brain
+
+My day job is tech lead for a database proxy service, which means
+context lives everywhere — Slack threads, Jira tickets, Confluence
+pages, Google Docs, code across multiple repos. I used to keep notes
+scattered across a dozen places and I'd lose track of half of them.
+
+Now I use a git repo that doubles as an [Obsidian](https://obsidian.md)
+vault, with a pretty straightforward structure:
+
+```text
+brain/
+├── journal/
+│   ├── daily/        # 2026-03-03.md — raw work log
+│   ├── weekly/       # 2026-W09.md — weekly rollup
+│   ├── monthly/      # 2026-02.md — monthly rollup
+│   └── yearly/       # 2026.md — yearly rollup
+├── tasks/            # individual task files + index
+├── projects/         # one folder per project
+├── people/           # notes on colleagues
+├── reports/          # investigation write-ups
+└── templates/        # templates for all entry types
+```
+
+The interesting part isn't the structure though — you could do this in
+any note-taking app. The interesting part is the `.cursor/rules/` file
+that makes Cursor maintain it for me.
+
+### Rules as the System
+
+Cursor has a concept of "rules" — markdown files in `.cursor/rules/`
+that it injects into every conversation. Mine tells it how to file
+information into my brain, and here's the gist of it:
+
+```markdown
+## Filing New Information
+
+When the user shares information about their work:
+
+1. Create or append to today's daily note
+2. Timestamp each entry as `### HH:MM` (24-hour format)
+3. Use `[[wiki-links]]` to reference related projects, tasks, and people
+4. Add relevant #tags
+5. If it updates a project, also update the project's overview
+
+## Task Detection
+
+After filing a journal entry, analyze the content for implied tasks:
+
+- Explicit action items ("I need to...", "TODO", "should")
+- Follow-ups from meetings ("agreed to...", "action item:")
+- Bug reports ("broke", "failing", "need to fix")
+- Requests from others ("X asked me to...")
+```
+
+I also added people detection — if a name comes up that doesn't have a
+file yet, Cursor asks me about them and creates one. When I mention
+someone who already has a file and the entry reveals something new (role
+change, team move), it appends to their notes automatically.
+
+In practice, I talk to Cursor like I'd talk to a colleague — concise, although
+I am still British about it..., so I'm saying "could you file that" and "please
+link Dave". If I say something like "had a meeting with Dave about the
+connection pooling changes, he's going to own the Redis migration, I need
+to update the design doc by Friday", it files a timestamped journal
+entry, links Dave's people file, links the relevant project, and prompts
+me asking whether I want to track the design doc update as a task.
+
+A daily entry ends up looking something like this:
+
+```markdown
+### 09:16
+
+In the office today. Continued work on [[projects/foo/overview|Project Foo]].
+Wrote specs for the event pipeline architecture.
+
+### 12:38
+
+Took over [[tasks/validate-config|PROJ-1234]] from [[people/alice|Alice]]
+— validating connections match expected type based on endpoint config.
+```
+
+Everything is `[[wiki-linked]]`, so Obsidian's graph view shows the
+connections between projects, people, and tasks, and the git history
+gives me a timeline of what I worked on and when.
+
+### Skills
+
+Beyond the always-on rules, Cursor has "skills" — markdown files that
+get pulled in when triggered by specific phrases. I have four in my
+brain repo:
+
+- **brain-sync**: "sync my brain" — detects gaps in my daily journal
+  (using GitHub, Jira, and Slack as hints for what I worked on),
+  generates weekly/monthly/yearly rollups, audits task statuses against
+  Jira, and finds untracked tasks.
+- **brain-investigate**: "investigate X" — searches Slack, Jira,
+  Confluence, Google Docs, and code in parallel via MCP integrations,
+  then synthesizes findings into a report filed under `reports/`.
+- **brain-recap**: "recap my week" — summarizes journal entries for a
+  given period.
+- **brain-todos**: "show my todos" — displays the task board grouped by
+  status.
+
+The investigate workflow is the standout. When I need to understand
+something across teams — say, the auth token refresh flow — Cursor fans
+out across five different data sources simultaneously, pulls back the
+relevant threads and docs, and drafts a structured report. After I
+review it and make corrections it gets committed, and that report
+becomes permanent context for future conversations about the same topic.
+
+The key insight is that the rules *are* the system. They enforce a
+consistency I'd never maintain manually — the timestamps, the
+wiki-links, the task detection, the cross-referencing. I just talk, and
+the structure emerges.
+
+## Tracey: Spec-Driven Development
+
+Here's a problem I've thought about for a while: how do you know your
+code actually implements what the spec says, and how do you know your
+tests actually cover the requirements? These are old questions, but they
+take on a new dimension when LLMs write your code.
+
+On a large agent-driven project, something became painfully clear: LLMs
+forget what they worked on and will lie about the status. They'll tell me
+a feature is implemented when it's half-done, or that tests pass when
+they don't cover the actual requirement. Worse, when I come back to a
+project weeks later, it's hard to justify *why* certain code exists —
+the LLM that wrote it is long gone, and its reasoning went with it.
+
+[Tracey](https://tracey.bearcove.eu/) is a tool by fasterthanlime that
+helps with this. You write requirements in markdown with `r[rule.id]`
+markers, annotate your code with `r[impl rule.id]`, and annotate your
+tests with `r[verify rule.id]`. Tracey scans both sides and reports
+coverage. Simple idea, but the implications for LLM-driven development
+are significant.
+
+To be clear, tracey is not formal verification and it's not a
+correctness tool. What it does is keep agents on track and make the
+source code easier to manage at a higher level. With tracey annotations
+in my repo, I can easily take my codebase and its spec and ask an agent
+to make sure the specs are correctly referenced. I still have to trust
+the agents to reference specs correctly — more on that later — but it's
+far easier for agents to remember why certain code exists when the
+reason is literally annotated above it. Instead of the LLM having to
+reconstruct intent from code structure, the `r[impl conn.open]` comment
+points it straight to the requirement in the spec.
+
+This matters a lot for keeping code clean. Without something like
+tracey, LLM-driven development tends toward bloat — fixes get tacked on
+in random places, dead code accumulates, and the codebase grows in ways
+that are hard to justify or review. Having the spec as a source of truth
+makes it much easier to refactor aggressively, because I can always ask
+"which requirements does this code serve?" and if the answer is none, I
+can just throw it out. The goal is to keep things as small and concise
+as possible for the solution, and tracey gives both me and the agents a
+shared map of what actually needs to exist.
+
+### How it works
+
+A spec file defines requirements:
+
+```markdown
+## Connection Lifecycle
+
+r[conn.open]
+The client MUST send a handshake frame before any other communication.
+
+r[conn.close]
+Either side MAY initiate a graceful close.
+```
+
+Code references them:
+
+```rust
+// r[impl conn.open]
+fn open_connection(&mut self) -> Result<()> {
+    self.send_handshake()?;
+    self.state = State::Open;
+    Ok(())
+}
+```
+
+Tests verify them:
+
+```rust
+#[test]
+// r[verify conn.open]
+fn test_handshake() {
+    let mut conn = Connection::new();
+    assert!(conn.open_connection().is_ok());
+}
+```
+
+And tracey tells you what's covered:
+
+```text
+$ tracey status
+
+  Spec    Coverage  Tested  Stale
+  conn    87.3%     64.1%   2 rules
+
+$ tracey uncovered
+
+  r[conn.close.timeout]  No implementations found
+```
+
+[James Munns posted about
+it](https://bsky.app/profile/jamesmunns.com/post/3mfz3u2bmmk2a)
+recently — "absolutely cooking", "this is *crazy* good." It has an LSP
+that lets you hover over annotations and jump to the spec, and in the
+replies someone made an observation that captures this perfectly: "having
+short comments that point to detailed documentation is extremely useful
+when working with agents."
+
+### Cursor Integration
+
+Tracey ships an MCP server, which means Cursor can query it directly. I
+have a tracey skill that teaches Cursor how to use the MCP tools —
+`tracey_status`, `tracey_uncovered`, `tracey_untested` — and a
+`tracey_specs.mdc` rule in projects that use it, establishing
+conventions for rule IDs and annotation placement.
+
+My workflow becomes: spec → test → code → refactor, with commits at each
+stage. The LLM writes all of it — the spec requirements, the tests, the
+implementation — which is risky, but splitting it into distinct phases
+with separate commits makes each step reviewable on its own. The agent
+usually follows this process faithfully, partly because the tracey rule
+in the project establishes the convention, and partly because my
+clean-development skill forces it to commit after each logical unit of
+work.
+
+Having the LLM write the specs is the part that feels most dangerous,
+since if the spec is wrong everything downstream inherits that error.
+But in practice the specs are where I do the most human review — they're
+short, readable markdown, and it's much easier to spot a bad requirement
+than a bad implementation buried in Rust. The spec is also where I put
+my design thinking; the LLM drafts based on what I tell it, but the
+structure and the trade-offs are mine.
+
+### Tracey's Blind Spot
+
+This workflow isn't perfect though, and I want to be honest about that.
+
+Tracey gives you structural coverage — it proves annotations exist — but
+not semantic coverage. An LLM can slap `// r[verify conn.open]` on a
+test that doesn't actually verify the handshake. The annotation is there
+and the coverage number goes up, but the requirement isn't really
+tested. [James Munns floated the
+idea](https://bsky.app/profile/jamesmunns.com/post/3mfwyqgbrjk2s) of a
+"human review checkpoint" system for this — for each requirement, ask a
+human whether the impl actually does what it claims and whether the test
+actually verifies it.
+
+## TDD with Cursor
+
+My implementation workflow is iterative. I describe what I want — the
+requirement, the constraints, maybe the function signature — and Cursor
+writes a test and an implementation. I review both, steer it ("that test
+doesn't cover the error case", "use `tokio::select!` here instead"), and
+it adjusts. I repeat this until it looks right.
+
+Tracey's `r[verify]` annotations create a natural TDD discipline here,
+because the requirements in the spec define what tests should exist.
+Cursor can query `tracey_untested` to find requirements without
+verification, then write a failing test with the appropriate `r[verify]`
+annotation, then implement to make it pass. It's not pure
+red-green-refactor, but the spec acts as the "red" — it tells me what's
+missing before anything gets written.
+
+## Keeping LLMs Honest
+
+More broadly, LLMs will cut corners if you let them. On side projects,
+additional review agents now audit the first agent's work to find gaps.
+On production code, the LLMs had to be taught how to write comments
+properly — "why" not "what" — and a dedicated rule and skill for
+documentation style got created after the first round of LLM-generated
+comments were all just restating what the code already said. There's
+also a clean-development skill that forces small, reviewable commits,
+which fits into my existing stacked-PR workflow nicely since each commit
+should be independently reviewable with no batching of unrelated
+changes. LLMs are still not particularly great at using git, but the
+skill helps keep them honest.
+
+The pattern that's emerged: you can't just trust the output. You need
+rules to constrain it, review layers to catch drift, and your own
+judgement to know when something looks right but isn't.
+
+## Voice-Driven Development
+
+Recently had surgery on my elbow, which means my typing speed is
+practically zero for a while. This is where the plan-and-steer workflow
+pays off in a completely unexpected way.
+
+Since my workflow is already not about writing code by hand — I describe
+intent, review plans, approve changes, and review output — the
+transition to speech-to-text has been surprisingly natural. I dictate
+what I want, Cursor proposes a plan, I say "looks good" or "no, change
+X", and it executes. The keyboard was already optional for the thinking
+part; now it's optional for the input part too.
+
+The second brain handles note-taking, task tracking, and
+cross-referencing without needing a keyboard, and Cursor handles the
+code. Between the two, the low WPM from dictation hasn't been the
+bottleneck expected. The fact that "I haven't written a single line of
+code in two weeks" was already true *before* the surgery probably helped
+with the transition.
+
+This post was written the same way — dictated, steered, reviewed.
+
+## Wrapping Up
+
+The addictive phase has mostly passed now. Looking back, it wasn't all
+that different from the thrill of first learning to code — staying up
+all night debugging because making something work was so exciting. Same
+energy, different tool.
+
+What works: the second brain is genuinely the most useful thing I've
+built for my personal productivity in years, tracey + Cursor is a
+compelling spec coverage workflow, and the TDD loop is fast when it
+works. What doesn't: LLMs still hallucinate, still cut corners, and
+still write code that looks right but isn't. Context windows have
+limits, $240/month is a lot of money, and the person using the tool
+still has to understand the system well enough to know when the output
+is wrong.
+
+I'm not trying to sell anyone on this. It works for me, with my
+particular brain, my particular ADHD, my particular job. Your mileage
+may vary.

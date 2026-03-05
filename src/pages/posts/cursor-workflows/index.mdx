@@ -230,8 +230,8 @@ Tests verify them:
 
 ```rust
 #[test]
+// r[verify conn.open]
 fn test_handshake() {
-    // r[verify conn.open]
     let mut conn = Connection::new();
     assert!(conn.open_connection().is_ok());
 }

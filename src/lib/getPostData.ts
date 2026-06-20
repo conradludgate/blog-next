@@ -7,6 +7,9 @@ export interface PostData {
 	tags: string[];
 	desc: string;
 	imageURL?: string;
+	// When true, the post is omitted from all listings and feeds (home, tags,
+	// RSS) but its /posts/... page is still generated and reachable directly.
+	hidden?: boolean;
 }
 
 export default async function getPostData(): Promise<PostData[]> {
@@ -24,9 +27,11 @@ export default async function getPostData(): Promise<PostData[]> {
 		};
 	}));
 
-	postData.sort((a, b) => {
+	const visible = postData.filter((post) => !post.hidden);
+
+	visible.sort((a, b) => {
 		return a.date > b.date ? -1 : 1;
 	});
 
-	return postData;
+	return visible;
 }

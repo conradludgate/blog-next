@@ -1,14 +1,17 @@
 .ThemeSwitcher {
 	position: absolute;
-	right: 1em;
+	/* rem, not em: buttons don't inherit font-size (UA sets ~13.3px), which
+	   would make em-based sizing/offset unpredictable. The 5rem header centres
+	   a 2.5rem button with a 1.25rem gap, so the right inset matches it. */
 	top: 50%;
+	right: 1.25rem;
 	transform: translateY(-50%);
 
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 2.5em;
-	height: 2.5em;
+	width: 2.5rem;
+	height: 2.5rem;
 	padding: 0;
 
 	border: none;
@@ -31,8 +34,8 @@
 }
 
 .ThemeSwitcher svg {
-	width: 1.25em;
-	height: 1.25em;
+	width: 1.25rem;
+	height: 1.25rem;
 }
 
 /* Light is the default: show the sun, hide the moon. The dark overrides flip it. */

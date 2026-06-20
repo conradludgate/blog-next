@@ -1,26 +1,18 @@
 "use client";
 import { ReactElement } from "react";
+import { useTheme } from "next-themes";
 import styles from "./ThemeSwitcher.module.css";
 
-function toggleTheme(): void {
-	const el = document.documentElement;
-	const next = el.dataset.theme === "dark" ? "light" : "dark";
-	el.dataset.theme = next;
-	try {
-		localStorage.setItem("theme", next);
-	} catch {
-		// ignore — storage may be unavailable (private mode, etc.)
-	}
-}
-
-// Which icon is shown is driven entirely by the `data-theme` attribute in CSS,
-// so the button renders identically on server and client (no hydration flash).
+// Which icon is shown is driven entirely by the `data-theme` attribute in CSS
+// (set by next-themes), so the button renders identically on server and client.
 export default function ThemeSwitcher(): ReactElement {
+	const { resolvedTheme, setTheme } = useTheme();
+
 	return (
 		<button
 			type="button"
 			className={styles.ThemeSwitcher}
-			onClick={toggleTheme}
+			onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
 			aria-label="Toggle colour theme"
 		>
 			<svg className={styles.sun} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">

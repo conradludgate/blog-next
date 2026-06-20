@@ -1,7 +1,7 @@
 import React, { ReactElement, ReactNode } from "react";
 
 export interface CodeProps {
-    className?: string,
+	className?: string,
 	children?: ReactNode,
 }
 

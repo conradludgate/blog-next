@@ -1,3 +1,4 @@
+"use client";
 import styles from "./ProgressBar.module.css";
 import { ReactElement, useEffect, useMemo, useState } from "react";
 

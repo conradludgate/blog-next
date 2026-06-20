@@ -1,5 +1,27 @@
 @use "themes/light";
 @use "themes/dark";
+@use "themes/prism/dark" as prism;
+
+// Light is the base. With no JS we follow the OS via prefers-color-scheme; an
+// explicit choice (data-theme, set by next-themes) is ordered last so it wins.
+:root {
+  @include prism.prism-theme;
+  @include light.light-theme;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    @include dark.dark-theme;
+  }
+}
+
+[data-theme="light"] {
+  @include light.light-theme;
+}
+
+[data-theme="dark"] {
+  @include dark.dark-theme;
+}
 
 @font-face {
   font-family: "Noto Serif Regular";
@@ -35,12 +57,15 @@ body {
 
   background-color: var(--color-bg);
   color: var(--color-fg);
+  // Blend page background and (inherited) text colour when the theme switches.
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 p code {
   padding: 0.125em 0.25em;
   background-color: var(--color-bg-secondary);
   border-radius: 3px;
+  transition: background-color 0.3s ease;
 }
 
 pre > code {
@@ -58,6 +83,7 @@ a {
   text-decoration: underline;
   text-decoration-skip-ink: auto;
   color: var(--color-fg-secondary);
+  transition: color 0.3s ease;
 }
 
 * {

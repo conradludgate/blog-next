@@ -1,0 +1,52 @@
+.ThemeSwitcher {
+	position: absolute;
+	/* rem, not em: buttons don't inherit font-size (UA sets ~13.3px), which
+	   would make em-based sizing/offset unpredictable. The 5rem header centres
+	   a 2.5rem button with a 1.25rem gap, so the right inset matches it. */
+	top: 50%;
+	right: 1.25rem;
+	transform: translateY(-50%);
+
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 2.5rem;
+	height: 2.5rem;
+	padding: 0;
+
+	border: none;
+	border-radius: 50%;
+	background-color: var(--color-bg-secondary);
+	color: var(--color-fg);
+	cursor: pointer;
+	-webkit-tap-highlight-color: transparent;
+	transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.ThemeSwitcher:hover {
+	color: var(--color-fg-secondary);
+	filter: brightness(0.95);
+}
+
+.ThemeSwitcher:focus-visible {
+	outline: 2px solid var(--color-fg);
+	outline-offset: 2px;
+}
+
+.ThemeSwitcher svg {
+	width: 1.25rem;
+	height: 1.25rem;
+}
+
+/* Light is the default: show the sun, hide the moon. The dark overrides flip it. */
+.moon {
+	display: none;
+}
+
+:global([data-theme="dark"]) .sun {
+	display: none;
+}
+
+:global([data-theme="dark"]) .moon {
+	display: block;
+}

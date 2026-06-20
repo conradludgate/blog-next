@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import styles from "@/styles/App.module.css";
-import ThemeProvider from "@/components/ThemeProvider";
+import { ThemeProvider } from "next-themes";
 import ThemeSwitcher from "@/components/ThemeSwitcher";
 
 export const metadata: Metadata = {
@@ -14,7 +14,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 	return (
 		<html lang="en-GB" suppressHydrationWarning>
 			<body>
-				<ThemeProvider>
+				<ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem>
 					<div className={styles.App}>
 						<header>
 							<Link href="/" prefetch={false}>Conrad Ludgate</Link>

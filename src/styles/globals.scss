@@ -1,4 +1,5 @@
-@import "themes/light.scss", "themes/dark.scss";
+@use "themes/light";
+@use "themes/dark";
 
 @font-face {
   font-family: "Noto Serif Regular";

@@ -11,13 +11,8 @@ export default function ProgressBar(): ReactElement {
 		return () => clearInterval(timer);
 	}, [setCounter]);
 
-	const [widthInt, setWidthInt] = useState(0);
-
-	const width = useMemo(() => {
-		const width = (1 - Math.exp(counter / -100)) * 100;
-		setWidthInt(Math.floor(width));
-		return width;
-	}, [counter, setWidthInt]);
+	const width = useMemo(() => (1 - Math.exp(counter / -100)) * 100, [counter]);
+	const widthInt = Math.floor(width);
 
 	const joke = useMemo(() => {
 		return jokes[hash(widthInt) % jokes.length];

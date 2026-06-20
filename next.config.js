@@ -1,17 +1,13 @@
 import nextMdx from "@next/mdx";
-import prism from "remark-prism";
-import slug from "rehype-slug";
 
 const withMdx = nextMdx({
 	extension: /\.mdx?$/,
 	options: {
 		providerImportSource: "@mdx-js/react",
-		remarkPlugins: [
-			prism,
-		],
-		rehypePlugins: [
-			slug,
-		],
+		// Plugins are referenced by name (not imported) so they work with
+		// Turbopack, which requires serializable loader options.
+		remarkPlugins: [["remark-prism", {}]],
+		rehypePlugins: [["rehype-slug", {}]],
 	},
 });
 
@@ -25,5 +21,4 @@ export default withMdx({
 		locales: ["en-GB"],
 		defaultLocale: "en-GB",
 	},
-	// output: 'export',
 });

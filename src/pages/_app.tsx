@@ -5,7 +5,7 @@ import React, { ReactElement } from "react";
 import styles from "@/styles/App.module.css";
 import { useTracking } from "@/lib/umami";
 import { MDXProvider } from "@mdx-js/react";
-import { MDXComponents } from "@mdx-js/react/lib";
+import type { MDXComponents } from "mdx/types";
 import Heading from "@/components/Heading";
 import Code from "@/components/Code";
 

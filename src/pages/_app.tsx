@@ -3,7 +3,6 @@ import { AppProps } from "next/app";
 import Link from "next/link";
 import React, { ReactElement } from "react";
 import styles from "@/styles/App.module.css";
-import { useTracking } from "@/lib/umami";
 import { MDXProvider } from "@mdx-js/react";
 import type { MDXComponents } from "mdx/types";
 import Heading from "@/components/Heading";
@@ -20,8 +19,6 @@ const components: MDXComponents = {
 };
 
 export default function App({ Component, pageProps }: AppProps): ReactElement {
-	useTracking();
-
 	return (
 		<div className={styles.App}>
 			<header>

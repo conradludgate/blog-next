@@ -11,6 +11,7 @@ export default function ThemeSwitcher(): ReactElement {
 	return (
 		<button
 			type="button"
+			data-theme-switcher=""
 			className={styles.ThemeSwitcher}
 			onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
 			aria-label="Toggle colour theme"

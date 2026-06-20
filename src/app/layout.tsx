@@ -14,6 +14,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 	return (
 		<html lang="en-GB" suppressHydrationWarning>
 			<body>
+				{/* The toggle needs JS; hide it when JS is unavailable (the page
+				    still follows the OS theme via prefers-color-scheme). */}
+				<noscript>
+					<style>{"[data-theme-switcher]{display:none}"}</style>
+				</noscript>
 				<ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem>
 					<div className={styles.App}>
 						<header>

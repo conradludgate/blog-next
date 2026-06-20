@@ -35,12 +35,15 @@ body {
 
   background-color: var(--color-bg);
   color: var(--color-fg);
+  // Blend page background and (inherited) text colour when the theme switches.
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 p code {
   padding: 0.125em 0.25em;
   background-color: var(--color-bg-secondary);
   border-radius: 3px;
+  transition: background-color 0.3s ease;
 }
 
 pre > code {
@@ -58,6 +61,7 @@ a {
   text-decoration: underline;
   text-decoration-skip-ink: auto;
   color: var(--color-fg-secondary);
+  transition: color 0.3s ease;
 }
 
 * {

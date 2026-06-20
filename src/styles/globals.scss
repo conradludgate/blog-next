@@ -1,5 +1,27 @@
 @use "themes/light";
 @use "themes/dark";
+@use "themes/prism/dark" as prism;
+
+// Light is the base. With no JS we follow the OS via prefers-color-scheme; an
+// explicit choice (data-theme, set by next-themes) is ordered last so it wins.
+:root {
+  @include prism.prism-theme;
+  @include light.light-theme;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    @include dark.dark-theme;
+  }
+}
+
+[data-theme="light"] {
+  @include light.light-theme;
+}
+
+[data-theme="dark"] {
+  @include dark.dark-theme;
+}
 
 @font-face {
   font-family: "Noto Serif Regular";

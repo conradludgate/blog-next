@@ -1,13 +1,6 @@
-@use "prism/dark" as prism;
-
 @mixin dark-theme {
 	--color-bg: #1a1a1a;
 	--color-fg: #e8e8e8;
 	--color-bg-secondary: #2f2f2f;
 	--color-fg-secondary: #e8e8e8;
-}
-
-[data-theme='dark'] {
-	@include prism.prism-theme;
-	@include dark-theme;
 }

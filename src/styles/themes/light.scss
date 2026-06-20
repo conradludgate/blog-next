@@ -1,3 +1,5 @@
+@use "prism/dark" as prism;
+
 @mixin light-theme {
 	--color-bg: white;
 	--color-fg: #5f5f5f;
@@ -6,6 +8,6 @@
 }
 
 :root {
-	@import "prism/dark.scss";
+	@include prism.prism-theme;
 	@include light-theme;
 }

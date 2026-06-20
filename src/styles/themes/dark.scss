@@ -1,3 +1,5 @@
+@use "prism/dark" as prism;
+
 @mixin dark-theme {
 	--color-bg: black;
 	--color-fg: white;
@@ -6,6 +8,6 @@
 }
 
 [data-theme='dark'] {
-	@import "prism/dark.scss";
+	@include prism.prism-theme;
 	@include dark-theme;
 }

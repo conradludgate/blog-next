@@ -1,6 +1,6 @@
 import { PostData } from "./getPostData";
 
-export async function generateRssItem(post: PostData): Promise<string> {
+export function generateRssItem(post: PostData): string {
 	return `
     <item>
       <guid>https://conradludgate.com${post.path}</guid>
@@ -12,8 +12,8 @@ export async function generateRssItem(post: PostData): Promise<string> {
 `;
 }
 
-export async function generateRss(posts: PostData[]): Promise<string> {
-	const itemsList = await Promise.all(posts.map(generateRssItem));
+export function generateRss(posts: PostData[]): string {
+	const itemsList = posts.map(generateRssItem);
 
 	return `<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">

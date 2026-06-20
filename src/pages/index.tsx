@@ -58,7 +58,7 @@ export function Post({ path, title, date, tags, desc }: PostData): ReactElement 
 export const getStaticProps: GetStaticProps = async () => {
 	const postData = await getPostData();
 
-	const rss = await generateRss(postData);
+	const rss = generateRss(postData);
 	const { writeFile } = await import("fs/promises");
 	await writeFile("./public/index.xml", rss);
 

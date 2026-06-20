@@ -1,30 +1,51 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# blog-next
 
-## Getting Started
+Source for [conradludgate.com](https://conradludgate.com) — a static blog built with
+[Next.js](https://nextjs.org/) (Pages Router) and MDX, deployed on [Vercel](https://vercel.com/).
 
-First, run the development server:
+## Development
+
+Requires Node 24 (see `.nvmrc`).
 
 ```bash
-npm run dev
-# or
-yarn dev
+npm install
+npm run dev     # start the dev server on http://localhost:3000
+npm run build   # production build
+npm run lint    # eslint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Writing a post
 
-You can start editing the page by modifying `pages/index.js`. The page auto-updates as you edit the file.
+Posts live in `src/pages/posts/` as MDX, either as `slug.mdx` or `slug/index.mdx`
+(use the directory form when the post has co-located images). Each post exports a
+`meta` object and wraps its content in the `BlogPost` layout:
 
-## Learn More
+```mdx
+export const meta = {
+  title: "My Post",
+  date: "2026-06-20",
+  tags: ["rust", "dev"],
+  desc: "A short summary used for previews and RSS.",
+  imageURL: "https://conradludgate.com/og-image/example.png", // optional
+};
 
-To learn more about Next.js, take a look at the following resources:
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+  return <BlogPost meta={meta}>{children}</BlogPost>;
+}
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Your markdown content here...
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
+The home page, tag pages, and RSS feeds are generated automatically from each post's
+`meta` (see `src/lib/getPostData.ts`).
 
-## Deploy on Vercel
+### Hiding a post
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/import?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Add `hidden: true` to a post's `meta` to keep it out of every listing and feed (home,
+tags, RSS) while leaving its `/posts/...` page reachable by direct link.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+## Deployment
+
+Pushed to `main` → deployed by Vercel. Pull requests get preview deployments.
+The Node version is pinned via `engines.node` in `package.json`.

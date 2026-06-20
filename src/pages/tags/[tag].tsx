@@ -50,7 +50,7 @@ export const getStaticProps: GetStaticProps<TaggedPosts, Params> = async functio
 		return post.tags.includes(tag);
 	});
 
-	const rss = await generateRss(filtered);
+	const rss = generateRss(filtered);
 	const { writeFile, mkdir } = await import("fs/promises");
 	await mkdir(`./public/tags/${tag}`, { recursive: true });
 	await writeFile(`./public/tags/${tag}/index.xml`, rss);

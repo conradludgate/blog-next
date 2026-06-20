@@ -1,18 +1,9 @@
-const months = [
-	"January",
-	"February",
-	"March",
-	"April",
-	"May",
-	"June",
-	"July",
-	"August",
-	"September",
-	"October",
-	"November",
-	"December",
-];
+const formatter = new Intl.DateTimeFormat("en-GB", {
+	day: "numeric",
+	month: "long",
+	year: "numeric",
+});
+
 export default function humanDate(dateString: string): string {
-	const date = new Date(dateString);
-	return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+	return formatter.format(new Date(dateString));
 }

@@ -1,6 +1,6 @@
 export const meta = {
   title: "A showcase of futures-buffered",
-  date: "2026-03-05",
+  date: "2026-06-21",
   tags: ["dev", "rust", "async"],
   desc: "A peek behind the curtains of how futures-buffered was created",
   imageURL: "https://conradludgate.com/og-image/ferris.png",
@@ -11,8 +11,8 @@ export default function Layout({ children }) {
   return <BlogPost meta={meta}>{children}</BlogPost>;
 }
 
-Back in 2022, I was deep in my async-arc, trying to maximise performance 
-everywhere I could. One issue that bothered me so much was `try_join_all(..)`.
+Back in 2022, I was deep in my async arc, trying to maximise performance 
+everywhere I could. One issue that bothered me so much was [`try_join_all(..)`](https://docs.rs/futures/0.3.31/futures/future/fn.try_join_all.html).
 
 ```rust
 // not the real API, but close enough.
@@ -25,7 +25,7 @@ async fn try_join_all<T, E>(
 
 This is a useful function for fanning out a bunch of work, waiting for all of
 them to complete, and handling an error early. There's a bunch of problems with
-this API (mostly cancellation safety) but that's not the highlight here. The
+this API (mostly cancellation safety) but that's not the focus here. The
 problem I had at the time was _allocations_.
 
 Rustaceans are allergic to unnecessary allocations. I know a thing or two about
@@ -41,10 +41,10 @@ is ready to make progress, it triggers its `Waker::wake` which should re-poll
 `try_join_all`. There's an issue here - how does `try_join_all` know what
 future to poll? A naive implementation would just poll all of the futures.
 
-This ends up being quadratic in complexity (n polls per wakeup * at least 2 wakeup per future * n futures = at least 2n^2 polls). This is acceptable for "small" lists (which `try_join_all` branches on with `const SMALL: usize = 30;`).
+This ends up being quadratic in complexity (n polls per wakeup * at least 2 wakeups per future * n futures = at least 2n² polls). This is acceptable for "small" lists (which `try_join_all` branches on with [`const SMALL: usize = 30;`](https://github.com/rust-lang/futures-rs/blob/0.3.31/futures-util/src/future/join_all.rs#L35)).
 For large lists, this is not scalable. So instead tricks need to be made to know
 exactly which sub-future needs polling. For this purpose, we hand out the work
-to `FuturesOrdered`, which inturn is built on top of `FuturesUnordered`.
+to [`FuturesOrdered`](https://docs.rs/futures/0.3.31/futures/stream/struct.FuturesOrdered.html), which in turn is built on top of [`FuturesUnordered`](https://docs.rs/futures/0.3.31/futures/stream/struct.FuturesUnordered.html).
 
 We can write our own `try_join_all` as such:
 
@@ -67,13 +67,14 @@ async fn try_join_all<T, E>(
 ### How does `FuturesOrdered` work?
 
 Well, `FuturesOrdered` is just `FuturesUnordered` + `BinaryHeap`. Every future
-inserted into `FuturesOrdered` ends up storing an index which is also returned.
+inserted into `FuturesOrdered` ends up storing an insertion index, which is later
+used to yield results in order.
 Whenever a future completes out of order, the result is pushed into the 
 `BinaryHeap` to be saved for later. Really, we need to look at `FuturesUnordered` for anything interesting.
 
 `FuturesUnordered` is a bit of a powerhouse. It's a full async executor.
 Each future pushed into the collection ends up essentially spawning a task.
-A `Task` is allocated for each future. Each `Task` contains atomic pointers 
+A [`Task`](https://github.com/rust-lang/futures-rs/blob/0.3.31/futures-util/src/stream/futures_unordered/task.rs#L10) is allocated for each future. Each `Task` contains atomic pointers 
 to build a linked-list of idle and woken tasks.
 
 When a `Task`'s future is woken, the task enters the "ready_to_run" linked-list,
@@ -98,8 +99,8 @@ So we fundamentally have a `Vec<Slot<Fut>>`, where `Slot` also encodes a
 free-list if the element is empty. But this doesn't yet give us the per-future 
 waker. This is because of some trickery around how `Waker`s work.
 
-`Waker` is a wrapper around `RawWaker`, which is a two-pointer structure,
-an un-typed "data" pointer, and a vtable pointer containing four functions
+`Waker` is a wrapper around [`RawWaker`](https://doc.rust-lang.org/std/task/struct.RawWaker.html), which is a two-pointer structure: an
+untyped "data" pointer and a [vtable pointer](https://doc.rust-lang.org/std/task/struct.RawWakerVTable.html) containing four functions
 (clone, drop, wake, wake_by_ref). It could be simplified to the following 
 construct
 
@@ -116,7 +117,7 @@ This would work, but in practice is a bit too limiting, so the unsafe
 manual vtable approach was preferred for the flexibility.
 
 One challenge you face is that `Waker`s must be atomic-reference-counted shaped, 
-so you cant really allocate a big list of wakers and then hand out wakers with 
+so you can't really allocate a big list of wakers and then hand out wakers with 
 data pointers offset into that big list, as each waker can be cloned/dropped 
 independently...
 
@@ -126,12 +127,12 @@ Well... maybe you _could_... if you're me :)
 
 To recap, we have the following setup:
 
-1. We need an strong count variable.
+1. We need a strong count variable.
 2. We need to store the parent waker.
 3. We need to have a way to identify each future individually.
 4. We need a queue to identify each woken future.
 
-In the end, here's the general structure I came up with:
+In the end, here's the general structure I came up with (simplified from [the real `waker_list.rs`](https://docs.rs/futures-buffered/0.2.13/src/futures_buffered/waker_list.rs.html#43)):
 
 ```rust
 struct WakerList {
@@ -151,11 +152,11 @@ struct WakerItem {
 }
 ```
 
-Each sub-waker contains a pointer to the start of each `WakerItem`.
+Each sub-waker's data pointer points at its `WakerItem`.
 The `index` value is key to making it all work. When doing any operation
 on the `WakerItem`, we first read the `index`. Then we count backwards that
 many `size_of::<WakerItem>()` bytes to get to the beginning of the `WakerList`.
 This lets us mess with the `strong`-count, or wake the parent `waker`.
 
-Not included here for brevity, but we also have an intrusive linked list
-`MpscQueue` to fetch the next woken future thanks to <https://docs.rs/cordyceps/0.3.4/cordyceps/struct.MpscQueue.html>.
+Not shown here for brevity: there's also an intrusive `MpscQueue` linked list to
+fetch the next woken future, courtesy of [cordyceps](https://docs.rs/cordyceps/0.3.4/cordyceps/struct.MpscQueue.html).

@@ -23,14 +23,24 @@ interface PostModule {
 	meta: Omit<PostData, "path">;
 }
 
-// Posts live in src/posts as either `<slug>.mdx` or `<slug>/index.mdx` (the
-// directory form is used when a post has co-located images).
+// Posts live in src/posts/<year>/<NNN>-<slug>.mdx (or `<NNN>-<slug>/index.mdx`
+// when a post has co-located images). The numeric prefix orders posts within a
+// year on disk; it is stripped to form the public slug, which is unchanged.
 export async function getPostFiles(): Promise<PostFile[]> {
-	const entries = await fs.readdir("src/posts/");
-	return entries.map((entry) => ({
-		slug: entry.replace(/\.mdx$/, ""),
-		file: entry.endsWith(".mdx") ? entry : `${entry}/index.mdx`,
-	}));
+	const years = await fs.readdir("src/posts/", { withFileTypes: true });
+	const files: PostFile[] = [];
+	for (const year of years) {
+		if (!year.isDirectory()) {
+			continue;
+		}
+		const entries = await fs.readdir(`src/posts/${year.name}`, { withFileTypes: true });
+		for (const entry of entries) {
+			const slug = entry.name.replace(/\.mdx$/, "").replace(/^\d+-/, "");
+			const file = entry.isDirectory() ? `${year.name}/${entry.name}/index.mdx` : `${year.name}/${entry.name}`;
+			files.push({ slug, file });
+		}
+	}
+	return files;
 }
 
 // Imports a single post module (its MDX component + meta) by slug. Returns null

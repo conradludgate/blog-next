@@ -95,9 +95,23 @@ few reasons why this is not a major limitation:
 2. Many uses of `FuturesUnordered` are via `StreamExt::buffered(n)`, where `n` is the max concurrency bound.
 3. We can use a "triangular array" construction when we need to lazily size up if we need more.
 
-So we fundamentally have a `Vec<Slot<Fut>>`, where `Slot` also encodes a 
-free-list if the element is empty. But this doesn't yet give us the per-future 
-waker. This is because of some trickery around how `Waker`s work.
+So we fundamentally have a `Vec<Slot<Fut>>`, where `Slot` is either an occupied
+future or, when empty, a link in an intrusive free-list. A couple of extra
+challenges turn this into what I ended up calling a [`PinSlotMap`](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/slot_map.rs#L8-L19):
+
+1. Futures must be _pinned_ to be polled, and can never move once they've started.
+   A plain `Vec` reallocates as it grows, moving its contents - so the slots live
+   in a `Pin<Box<[Slot<F>]>>` that stays put.
+2. Freeing a slot has to leave every other index untouched (shifting would break
+   both pinning and the indices). So a freed slot becomes a `NextFree(..)` link,
+   and a `free_head` points at the next one to hand out.
+
+That's the name: pinned storage (`Pin`) plus a [`slotmap`](https://docs.rs/slotmap)-style
+map of stable, reusable indices (`SlotMap`). The `slotmap` crate goes one step
+further with versioned keys, so a stale handle into a recycled slot is caught - we
+don't bother, since there's nowhere to stash a version on the `WakerItem`.
+But this still doesn't give us the per-future waker. This is because of some
+trickery around how `Waker`s work.
 
 `Waker` is a wrapper around [`RawWaker`](https://doc.rust-lang.org/std/task/struct.RawWaker.html), which is a two-pointer structure: an
 untyped "data" pointer and a [vtable pointer](https://doc.rust-lang.org/std/task/struct.RawWakerVTable.html) containing four functions
@@ -132,7 +146,7 @@ To recap, we have the following setup:
 3. We need to have a way to identify each future individually.
 4. We need a queue to identify each woken future.
 
-In the end, here's the general structure I came up with (simplified from [the real `waker_list.rs`](https://docs.rs/futures-buffered/0.2.13/src/futures_buffered/waker_list.rs.html#43)):
+In the end, here's the general structure I came up with (simplified from [the real `waker_list.rs`](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/waker_list.rs#L43)):
 
 ```rust
 struct WakerList {
@@ -160,3 +174,46 @@ This lets us mess with the `strong`-count, or wake the parent `waker`.
 
 Not shown here for brevity: there's also an intrusive `MpscQueue` linked list to
 fetch the next woken future, courtesy of [cordyceps](https://docs.rs/cordyceps/0.3.4/cordyceps/struct.MpscQueue.html).
+
+## Putting it together
+
+A [`FuturesUnorderedBounded`](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/futures_unordered_bounded.rs#L107-L110)
+really is just those two pieces sitting next to each other - the slot map holding
+the futures, and the `WakerList`:
+
+```rust
+pub struct FuturesUnorderedBounded<F> {
+    tasks: PinSlotMap<F>,
+    shared: WakerList,
+}
+```
+
+Inserting a future is straightforward: we [grab a free slot and drop the future
+in](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/futures_unordered_bounded.rs#L158),
+then [push that slot's index onto the `WakerList` queue](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/waker_list.rs#L123)
+so it gets polled on the first pass.
+
+Polling is the mirror image: we [pop the first ready index off the queue](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/waker_list.rs#L155-L167),
+[look up the future at that index](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/futures_unordered_bounded.rs#L223-L231)
+(it may have already finished and freed its slot), and poll it with the `Waker`
+backed by that slot's `WakerItem`. When the future wakes, its index lands back on
+the queue, and round we go - no per-task `Arc`, just one
+shared slot map and one waker allocation.
+
+### Growing past a fixed size
+
+That's the bounded case, but `try_join_all` and `StreamExt::buffered` don't always
+know their size up front. This is where the "triangular array" comes in:
+`FuturesUnordered` wraps a `VecDeque<FuturesUnorderedBounded>`, where each new
+bounded set is twice the capacity of the last. We only ever insert into the newest
+set, allocating a fresh (larger) one when it fills. Crucially, we never move
+futures back into the smaller sets - so as they drain, the small ones at the front
+empty out and get freed early, keeping fragmentation down.
+
+The doubling-bucket trick isn't mine, [`thread_local`](https://github.com/Amanieu/thread_local-rs)
+has long used the same idea (buckets that double in size so existing entries never
+move), and [`boxcar`](https://github.com/ibraheemdev/boxcar) later applied it to an
+append-only, lock-free `Vec`.
+
+So we go from one `Arc` allocation _per future_ to a handful of shared allocations
+that double in size - and most of the time, just a single one.

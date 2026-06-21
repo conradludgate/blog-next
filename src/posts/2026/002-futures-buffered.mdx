@@ -24,7 +24,7 @@ async fn try_join_all<T, E>(
 ```
 
 This is a useful function for fanning out a bunch of work, waiting for all of
-them to complete, and handling an error early. There's a bunch of problems with
+them to complete, and handling an error early. There are a bunch of problems with
 this API (mostly cancellation safety) but that's not the focus here. The
 problem I had at the time was _allocations_.
 
@@ -34,8 +34,8 @@ But before I go into that, let me elaborate on the allocations.
 
 ## How `try_join_all` works
 
-In order to run a series of futures concurrently, you need to poll them all
-out-of-order. The first time you poll the `try_join_all` function, you will
+In order to run a series of futures concurrently, you need to be able to poll
+them in any order. The first time you poll the `try_join_all` function, you will
 need to poll all of the futures provided to kick them off. When one of them 
 is ready to make progress, it triggers its `Waker::wake` which should re-poll
 `try_join_all`. There's an issue here - how does `try_join_all` know what
@@ -88,7 +88,7 @@ It's a very powerful abstraction, but I find it unfortunate to need so many allo
 
 The key insight is that we can allocate a bunch of task slots next to each other.
 And by using a free-list, we can reuse slots when they are done. This requires
-we know how many tasks (or an upper bound) we want to spawn at once. There's a
+we know how many tasks (or an upper bound) we want to spawn at once. There are a
 few reasons why this is not a major limitation:
 
 1. Most uses of `try_join_all` have a known number of futures
@@ -169,7 +169,8 @@ struct WakerItem {
 Each sub-waker's data pointer points at its `WakerItem`.
 The `index` value is key to making it all work. When doing any operation
 on the `WakerItem`, we first read the `index`. Then we count backwards that
-many `size_of::<WakerItem>()` bytes to get to the beginning of the `WakerList`.
+many `size_of::<WakerItem>()` bytes to reach the start of the `slice`, and step
+back over the header fields to land at the beginning of the `WakerList`.
 This lets us mess with the `strong`-count, or wake the parent `waker`.
 
 Not shown here for brevity: there's also an intrusive `MpscQueue` linked list to

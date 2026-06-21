@@ -215,6 +215,3 @@ The doubling-bucket trick isn't mine, [`thread_local`](https://github.com/Amanie
 has long used the same idea (buckets that double in size so existing entries never
 move), and [`boxcar`](https://github.com/ibraheemdev/boxcar) later applied it to an
 append-only, lock-free `Vec`.
-
-So we go from one `Arc` allocation _per future_ to a handful of shared allocations
-that double in size - and most of the time, just a single one.

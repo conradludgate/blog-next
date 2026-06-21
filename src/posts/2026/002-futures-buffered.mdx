@@ -1,0 +1,217 @@
+export const meta = {
+  title: "A showcase of futures-buffered",
+  date: "2026-06-21",
+  tags: ["dev", "rust", "async"],
+  desc: "A peek behind the curtains of how futures-buffered was created",
+  imageURL: "https://conradludgate.com/og-image/ferris.png",
+};
+
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+  return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+Back in 2022, I was deep in my async arc, trying to maximise performance 
+everywhere I could. One issue that bothered me so much was [`try_join_all(..)`](https://docs.rs/futures/0.3.31/futures/future/fn.try_join_all.html).
+
+```rust
+// not the real API, but close enough.
+async fn try_join_all<T, E>(
+    futs: Vec<impl Future<Output = Result<T, E>>>
+) -> Result<Vec<T>, E> {
+    // ..
+}
+```
+
+This is a useful function for fanning out a bunch of work, waiting for all of
+them to complete, and handling an error early. There are a bunch of problems with
+this API (mostly cancellation safety) but that's not the focus here. The
+problem I had at the time was _allocations_.
+
+Rustaceans are allergic to unnecessary allocations. I know a thing or two about
+async internals so I could smell them from a mile away and it got me thinking...
+But before I go into that, let me elaborate on the allocations.
+
+## How `try_join_all` works
+
+In order to run a series of futures concurrently, you need to be able to poll
+them in any order. The first time you poll the `try_join_all` function, you will
+need to poll all of the futures provided to kick them off. When one of them 
+is ready to make progress, it triggers its `Waker::wake` which should re-poll
+`try_join_all`. There's an issue here - how does `try_join_all` know what
+future to poll? A naive implementation would just poll all of the futures.
+
+This ends up being quadratic in complexity (n polls per wakeup * at least 2 wakeups per future * n futures = at least 2n² polls). This is acceptable for "small" lists (which `try_join_all` branches on with [`const SMALL: usize = 30;`](https://github.com/rust-lang/futures-rs/blob/0.3.31/futures-util/src/future/join_all.rs#L35)).
+For large lists, this is not scalable. So instead tricks need to be made to know
+exactly which sub-future needs polling. For this purpose, we hand out the work
+to [`FuturesOrdered`](https://docs.rs/futures/0.3.31/futures/stream/struct.FuturesOrdered.html), which in turn is built on top of [`FuturesUnordered`](https://docs.rs/futures/0.3.31/futures/stream/struct.FuturesUnordered.html).
+
+We can write our own `try_join_all` as such:
+
+```rust
+// again, not the real API, but close enough.
+async fn try_join_all<T, E>(
+    futs: Vec<impl Future<Output = Result<T, E>>>
+) -> Result<Vec<T>, E> {
+    let mut out = Vec::with_capacity(futs.len());
+    let mut futs: FuturesOrdered<_> = futs.into_iter().collect();
+
+    while let Some(x) = futs.next().await {
+        out.push(x?);
+    }
+
+    Ok(out)
+}
+```
+
+### How does `FuturesOrdered` work?
+
+Well, `FuturesOrdered` is just `FuturesUnordered` + `BinaryHeap`. Every future
+inserted into `FuturesOrdered` ends up storing an insertion index, which is later
+used to yield results in order.
+Whenever a future completes out of order, the result is pushed into the 
+`BinaryHeap` to be saved for later. Really, we need to look at `FuturesUnordered` for anything interesting.
+
+`FuturesUnordered` is a bit of a powerhouse. It's a full async executor.
+Each future pushed into the collection ends up essentially spawning a task.
+A [`Task`](https://github.com/rust-lang/futures-rs/blob/0.3.31/futures-util/src/stream/futures_unordered/task.rs#L10) is allocated for each future. Each `Task` contains atomic pointers 
+to build a linked-list of idle and woken tasks.
+
+When a `Task`'s future is woken, the task enters the "ready_to_run" linked-list,
+and then it wakes up the parent `FuturesUnordered` waker. The "ready_to_run"
+queue makes it easy to tell which futures need to be polled, and we don't have
+to poll all the rest.
+
+It's a very powerful abstraction, but I find it unfortunate to need so many allocations.
+
+## Enter `futures-buffered`
+
+The key insight is that we can allocate a bunch of task slots next to each other.
+And by using a free-list, we can reuse slots when they are done. This requires
+we know how many tasks (or an upper bound) we want to spawn at once. There are a
+few reasons why this is not a major limitation:
+
+1. Most uses of `try_join_all` have a known number of futures
+2. Many uses of `FuturesUnordered` are via `StreamExt::buffered(n)`, where `n` is the max concurrency bound.
+3. We can use a "triangular array" construction when we need to lazily size up if we need more.
+
+So we fundamentally have a `Vec<Slot<Fut>>`, where `Slot` is either an occupied
+future or, when empty, a link in an intrusive free-list. A couple of extra
+challenges turn this into what I ended up calling a [`PinSlotMap`](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/slot_map.rs#L8-L19):
+
+1. Futures must be _pinned_ to be polled, and can never move once they've started.
+   A plain `Vec` reallocates as it grows, moving its contents - so the slots live
+   in a `Pin<Box<[Slot<F>]>>` that stays put.
+2. Freeing a slot has to leave every other index untouched (shifting would break
+   both pinning and the indices). So a freed slot becomes a `NextFree(..)` link,
+   and a `free_head` points at the next one to hand out.
+
+That's the name: pinned storage (`Pin`) plus a [`slotmap`](https://docs.rs/slotmap)-style
+map of stable, reusable indices (`SlotMap`). The `slotmap` crate goes one step
+further with versioned keys, so a stale handle into a recycled slot is caught - we
+don't bother, since there's nowhere to stash a version on the `WakerItem`.
+But this still doesn't give us the per-future waker. This is because of some
+trickery around how `Waker`s work.
+
+`Waker` is a wrapper around [`RawWaker`](https://doc.rust-lang.org/std/task/struct.RawWaker.html), which is a two-pointer structure: an
+untyped "data" pointer and a [vtable pointer](https://doc.rust-lang.org/std/task/struct.RawWakerVTable.html) containing four functions
+(clone, drop, wake, wake_by_ref). It could be simplified to the following 
+construct
+
+```rust
+trait Wake {
+    fn wake_by_ref(&self);
+    fn wake(self: Arc<Self>);
+}
+
+type Waker = Arc<dyn Wake>;
+```
+
+This would work, but in practice is a bit too limiting, so the unsafe 
+manual vtable approach was preferred for the flexibility.
+
+One challenge you face is that `Waker`s must be atomic-reference-counted shaped, 
+so you can't really allocate a big list of wakers and then hand out wakers with 
+data pointers offset into that big list, as each waker can be cloned/dropped 
+independently...
+
+Well... maybe you _could_... if you're me :)
+
+### Here comes the `WakerList`
+
+To recap, we have the following setup:
+
+1. We need a strong count variable.
+2. We need to store the parent waker.
+3. We need to have a way to identify each future individually.
+4. We need a queue to identify each woken future.
+
+In the end, here's the general structure I came up with (simplified from [the real `waker_list.rs`](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/waker_list.rs#L43)):
+
+```rust
+struct WakerList {
+    // total number of aggregate waker clones
+    strong: AtomicUsize,
+    // parent waker
+    waker: AtomicWaker,
+    // length of the waker list
+    len: usize,
+    // each sub-waker
+    slice: [WakerItem],
+}
+
+struct WakerItem {
+    woken: Mutex<bool>,
+    index: usize,
+}
+```
+
+Each sub-waker's data pointer points at its `WakerItem`.
+The `index` value is key to making it all work. When doing any operation
+on the `WakerItem`, we first read the `index`. Then we count backwards that
+many `size_of::<WakerItem>()` bytes to reach the start of the `slice`, and step
+back over the header fields to land at the beginning of the `WakerList`.
+This lets us mess with the `strong`-count, or wake the parent `waker`.
+
+Not shown here for brevity: there's also an intrusive `MpscQueue` linked list to
+fetch the next woken future, courtesy of [cordyceps](https://docs.rs/cordyceps/0.3.4/cordyceps/struct.MpscQueue.html).
+
+## Putting it together
+
+A [`FuturesUnorderedBounded`](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/futures_unordered_bounded.rs#L107-L110)
+really is just those two pieces sitting next to each other - the slot map holding
+the futures, and the `WakerList`:
+
+```rust
+pub struct FuturesUnorderedBounded<F> {
+    tasks: PinSlotMap<F>,
+    shared: WakerList,
+}
+```
+
+Inserting a future is straightforward: we [grab a free slot and drop the future
+in](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/futures_unordered_bounded.rs#L158),
+then [push that slot's index onto the `WakerList` queue](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/waker_list.rs#L123)
+so it gets polled on the first pass.
+
+Polling is the mirror image: we [pop the first ready index off the queue](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/waker_list.rs#L155-L167),
+[look up the future at that index](https://github.com/conradludgate/futures-buffered/blob/c443bfc9e31a31047a4c7b10ffc0504d51df830f/src/futures_unordered_bounded.rs#L223-L231)
+(it may have already finished and freed its slot), and poll it with the `Waker`
+backed by that slot's `WakerItem`. When the future wakes, its index lands back on
+the queue, and round we go - no per-task `Arc`, just one
+shared slot map and one waker allocation.
+
+### Growing past a fixed size
+
+That's the bounded case, but `try_join_all` and `StreamExt::buffered` don't always
+know their size up front. This is where the "triangular array" comes in:
+`FuturesUnordered` wraps a `VecDeque<FuturesUnorderedBounded>`, where each new
+bounded set is twice the capacity of the last. We only ever insert into the newest
+set, allocating a fresh (larger) one when it fills. Crucially, we never move
+futures back into the smaller sets - so as they drain, the small ones at the front
+empty out and get freed early, keeping fragmentation down.
+
+The doubling-bucket trick isn't mine, [`thread_local`](https://github.com/Amanieu/thread_local-rs)
+has long used the same idea (buckets that double in size so existing entries never
+move), and [`boxcar`](https://github.com/ibraheemdev/boxcar) later applied it to an
+append-only, lock-free `Vec`.

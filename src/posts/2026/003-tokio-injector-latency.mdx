@@ -1,0 +1,206 @@
+export const meta = {
+  title: "Crossing the tokio runtime boundary isn't free",
+  date: "2026-06-21",
+  tags: ["dev", "rust", "async", "tokio"],
+  desc: "Spawning or waking a task on tokio from outside a worker thread is surprisingly slow. A look at the injector queue, with benchmarks.",
+  imageURL: "https://conradludgate.com/og-image/ferris.png",
+};
+
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+  return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+We've been building a [tokio-compat](https://docs.rs/tokio) style integration on top of
+[Envoy's Rust dynamic modules](https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/dynamic_modules/v3/dynamic_modules).
+Envoy's executor is actually a pretty good fit for Rust async — its scheduler
+"commit" is basically a `Waker::wake` — so you can drive a `Future` directly on
+an Envoy worker. But we're a tokio-heavy house, and we want tokio's IO and
+ecosystem (there's only so much you can do on Envoy directly). So we do the
+obvious thing: spin up a multi-threaded tokio runtime in the background, and
+wrap the Envoy-driven work in a `Handle::enter` so the tokio context is
+available for spawning and IO registration.
+
+```rust
+// once, at startup
+let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+
+// on an Envoy worker thread, per request
+let _guard = rt.handle().enter();
+// ... now tokio::spawn and tokio IO work here ...
+```
+
+It works. But the scheduling latency was bad — on the order of **~100µs** just to
+get a spawned task running, which is a lot when you're trying to be in the
+microsecond business. The spawn itself is cheap; the time is spent waiting for
+the task to actually be *scheduled*. This post is about where that time goes,
+and what you can (and can't) do about it.
+
+## How tokio's multi-threaded scheduler hands out work
+
+Each worker thread has a **local run queue** (a bounded ring buffer, 256 slots).
+When you `spawn` or `wake` a task *from a worker thread*, it lands on that
+worker's local queue and gets picked up almost immediately — this is the fast
+path the scheduler is optimised for.
+
+Tasks scheduled from *outside* a worker thread have nowhere local to go, so they
+go on the **injector queue** — a single global queue behind a mutex. This is the
+path every `Handle::enter`-from-a-foreign-thread spawn takes, along with
+cross-runtime channels, cross-runtime `Mutex`/`Notify`, and `spawn_blocking`
+return values. Anything that isn't already on a worker.
+
+The catch is when workers *look* at the injector. A worker's hot loop checks its
+local queue first; it only drains the injector when its local queue is empty, or
+once every `global_queue_interval` ticks. You can see this in
+[`next_task`](https://github.com/tokio-rs/tokio/blob/66e29121/tokio/src/runtime/scheduler/multi_thread/worker.rs#L1062):
+
+```rust
+fn next_task(&mut self, worker: &Worker) -> Option<Notified> {
+    if self.tick % self.global_queue_interval == 0 {
+        // periodically, check the global (injector) queue first
+        worker.handle.next_remote_task().or_else(|| self.next_local_task())
+    } else {
+        // otherwise, local first; only touch the injector if local is empty
+        self.next_local_task().or_else(|| /* take from injector */)
+    }
+}
+```
+
+So a busy worker — one whose local queue is never empty — will ignore the
+injector entirely between interval ticks. And when the runtime is idle, there's
+no worker spinning to notice the new task at all; one has to be **unparked**
+first. Both of those cost you.
+
+## Measuring it
+
+I wrote a small latency harness ([`benches/inject_latency_dist.rs`](https://github.com/conradludgate/tokio/blob/local-injector-queue/benches/inject_latency_dist.rs))
+that spawns a task and awaits it, timing each round-trip, and reports percentiles
+across a few runtime states. The baseline is spawning *from a worker* (local queue); the rest
+spawn from the `block_on` thread (i.e. through the injector), under different
+loads:
+
+- **idle** — workers parked.
+- **partial** — a couple of tasks at ~20% duty; lightly loaded, most workers
+  parked. The realistic "service mostly waiting on IO" case.
+- **loaded** — many short tasks; every worker awake and cycling.
+- **saturated** — every worker stuck in a long (~100µs) poll.
+
+> The numbers below are from my laptop (macOS, 4 workers). Absolute values are
+> platform-dependent — park/unpark and the IO driver behave differently on Linux
+> — so treat the *shape* as the result, not the digits. _(TODO: replace with the
+> Linux run.)_
+
+| where the spawn comes from | p50 | p99 |
+| --- | --- | --- |
+| on a worker (local queue), idle | 0.1µs | 0.9µs |
+| on a worker (local queue), **saturated** | 0.1µs | 0.3µs |
+| on a worker, saturated, **LIFO slot off** | 0.2µs | 34µs |
+| injector, **idle** | 7.8µs | 12µs |
+| injector, **partial** (light load) | 7.7µs | 14µs |
+| injector, **loaded** (workers awake) | 3.0µs | 8µs |
+| injector, **saturated** (long polls) | 17µs | 82µs (tail to ~1ms) |
+
+A few things jump out.
+
+**A local schedule is ~100ns; the injector is 30–70× that**, even when the
+runtime is idle. That factor is the price of crossing the boundary — and it
+really is the *boundary*, not the load. Spawning *from* a worker stays ~100ns
+even when every worker is saturated (with an even tighter tail, since the worker
+stays hot). That's the
+[LIFO slot](https://github.com/tokio-rs/tokio/blob/66e29121/tokio/src/runtime/scheduler/multi_thread/worker.rs#L1353):
+a non-yield `spawn` from a worker is stashed in a slot the worker checks *before*
+its run queue, so your freshly-spawned task jumps ahead of everything else and
+ping-pongs with its parent on the same thread. Turn the slot off
+(`Builder::disable_lifo_slot`) and that saturated tail balloons — p99 goes from
+~0.4µs to ~34µs — because your task now drops to the back of the run queue and
+waits behind the saturating work, which is exactly the queue the slot exists to
+skip. A saturated runtime schedules its *own* work in nanoseconds; only work
+arriving from *outside* pays. So the real axis isn't idle-vs-busy — it's
+on-a-worker vs off-it.
+
+**There are really two tiers**, and which one you're in depends on whether a
+worker is *awake* to notice the task:
+
+- ~3µs when a worker is already cycling (`loaded`) — it sees the injected task on
+  its next tick, no thread wakeup needed.
+- ~7.7µs when a worker has to be **unparked** first (`idle`). That extra ~5µs is
+  the cost of waking a sleeping thread.
+
+And here's the part that surprised me: **light load lands in the slow tier, not
+the fast one.** `partial` (7.7µs) is basically identical to `idle`, not to
+`loaded`. Even though there's a worker doing occasional work, there are still
+parked workers around — and on a remote schedule, tokio wakes a *parked* worker
+rather than waiting for the busy one to come back. So "the runtime is doing a
+little work" doesn't save you; you pay the unpark the moment any worker is
+asleep. That's exactly the regime our Envoy runtime lives in.
+
+**`saturated` is a different, worse problem.** When every worker is mid-poll,
+nobody checks the injector until a poll finishes, and the tail blows out — p99
+82µs, with the occasional sample over a millisecond. You can't preempt a running
+poll, so this floor is the poll granularity itself.
+
+## The knob that doesn't help
+
+The obvious lever is `global_queue_interval` — make workers check the injector
+more often. tokio lets you set it on the builder, so no patch required:
+
+```rust
+Builder::new_multi_thread().global_queue_interval(1) // check every tick
+```
+
+It barely moves anything:
+
+- **idle / partial**: no change. An idle worker's local queue is already empty,
+  so it falls through to the injector every tick regardless. The interval was
+  never the problem — the *wakeup* is.
+- **saturated**: it trims the tail (the worker checks the injector the instant
+  its current poll ends instead of several polls later), but the poll-duration
+  floor remains. A worker stuck in a 100µs poll can't look at anything until it
+  returns.
+
+So the batching interval isn't where the latency lives. It's the cross-thread
+wakeup (idle/partial) and poll granularity (saturated).
+
+## What actually helps
+
+**Keep a worker hot.** If a worker is already awake when the task arrives, you
+skip the unpark and drop into the ~3µs tier. You can do this entirely in
+userspace — spawn a task that never lets the worker park:
+
+```rust
+// burns a core to stay in the fast tier
+tokio::spawn(async { loop { tokio::task::yield_now().await; } });
+```
+
+In the harness, doing this for every worker takes the idle 7.8µs down to ~3µs —
+about 2.5×. The catches: it pins those cores at 100%, and you need *all* workers
+hot, because tokio will happily wake a parked one if any remain. It's the classic
+latency-for-CPU trade, and for a latency-critical service with cores to spare,
+it's worth it.
+
+**Don't cross the boundary at all.** ~3µs is the floor for the keep-hot approach
+— that residual is the injector mutex plus the cross-thread handoff plus waking
+the caller back up. The only way under it is to not make the round-trip: drive
+latency-critical futures on the Envoy executor directly (its commit-as-waker is
+right there) and reserve the tokio runtime for the work that genuinely needs
+tokio. The boundary is the cost; the cheapest boundary crossing is the one you
+don't do.
+
+**For throughput, there's a real tokio-side fix.** Everything above is about
+single-task latency. If your problem is instead *contention* — many threads
+hammering the injector mutex — that's a different axis, and there's a nice open
+PR for it:
+[#8208 `global_queue_share_per_worker`](https://github.com/tokio-rs/tokio/pull/8208).
+It lets a worker pull a larger batch from the injector per lock (instead of its
+`1/N` share), cutting how often workers contend on the mutex. It's a throughput
+win on large, mutex-bound runtimes — not a latency fix, but worth knowing about
+if you're in that regime.
+
+## Takeaway
+
+tokio's injector queue is a throughput-and-fairness structure, not a low-latency
+path. Crossing into the runtime from outside a worker costs you a global-queue
+trip and, unless a worker happens to be awake, a thread wakeup on top — tens of
+microseconds, in a regime (light load) that's easy to assume is cheap. If you
+care about scheduling latency: keep work on the executor that's already running
+it, and treat every runtime-boundary crossing as something you're paying for.

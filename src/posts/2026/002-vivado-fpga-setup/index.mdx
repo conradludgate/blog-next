@@ -1,0 +1,85 @@
+export const meta = {
+  title: "Getting started with Vivado for FPGA",
+  date: "2026-08-09",
+  tags: ["dev", "fpga", "xilinx", "vivado"],
+  desc: "Documenting how I was able to program my Arty Z7-20 using Vivado",
+};
+
+import BlogPost from "@/layouts/BlogPost";
+export default function Layout({ children }) {
+  return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+I wanted a detox from LLMs, to make sure I still maintain some low level problem solving skills.
+I thought a cool project would be to build a RISCV implementation that runs on an FPGA. I've
+never done anything with FPGA before, and I've only ever designed a CPU as part of https://turingcomplete.game/,
+so I'm fully expecting this to be a hard project.
+
+After some research, I figured a Zynq 7020 would be a good SoC, and the Arty Z7 by Digilent was a nice all-in-one
+package which I could extend over time. Importantly, I noticed that the Zynq 7 series is able to be used with
+a free license (which it turns out is not a given). This should have been a red flag but I didn't yet realise it.
+Unfortunately I have already failed my plan, but I think it's still within the spirit. Let me explain.
+
+My board arrived, and I was already off to a bad start. I had to spend 45 minutes looking for a micro-usb cable (in 2026...), 
+eventually I found one that was being used to power one of my many blood pressure monitors. After that, it took me another
+45 minutes just to get Vivado installed. Getting the free license was a very tedious process, but it worked in the end.
+
+Now I have Vivado, a cable, and my board. I connected the board to my PC and it lights up with the built-in project which
+demonstrated the buttons, switches, LEDs, a clock. The buttons and switches demonstrated some simple logic circuits - good
+confirmation that the board likely works. Now I can try set up my own project. Turns out this wasn't so simple for me. I
+tried to use the tutorials linked on the [product page](https://digilent.com/reference/programmable-logic/arty-z7/start),
+but they were basically useless. I tried searching around for others, but still I just couldn't figure out how to actually
+write some verilog and get it onto my board.
+
+So... I asked GPT-5.6-Luna Extra High (with my ChatGPT Plus £20/month subscription). While this is a defeat, I made sure
+to redefine my rules accordingly.
+
+1. I will not use it to write or debug any of my code for the RISCV project.
+2. I will make sure I only use it to teach me how to do something.
+3. I will write about what I learned.
+
+This is what I've learned so far setting up https://github.com/conradludgate/riscv-arty-z7-20/commit/2240f318dd7a064ecd38373199c40f45af6631b7.
+
+# Terminology
+
+I want to start off by documenting the terminology and how they fit together. Otherwise it's all a bit overwhelming.
+
+## Constraints
+
+Your FPGA will necessarily include some IO ports, otherwise it cant do anything useful.
+The chip itself does not know or care about what each port does - it might be a USB peripheral,
+it might be an LED, it might be a digital audio jack, it might be a clock signal. This decision needs
+to be made on a port by port basis.
+
+For an integrated FPGA, these assignments will have already been made by the manufacturer, but a production deployment
+might have you developing your own boards with these chips. Because of this, there's a lot of flexibility and control in
+how you assign these ports. To handle this, your project needs to define some "constraints" which guides the "place and route"
+system.
+
+For my Z7-20, all it took was to download the [constraint file provided by Digilent](https://github.com/Digilent/Arty-Z7-HW/blob/20/master/src/constraints/Arty-Z7-20-Master.xdc)
+
+To explain how the constraints format works, let's take a look at an example:
+
+```tcl
+set_property -dict { PACKAGE_PIN H16    IOSTANDARD LVCMOS33 } [get_ports { clk }]; #IO_L13P_T2_MRCC_35 Sch=SYSCLK
+create_clock -add -name sys_clk_pin -period 8.00 -waveform {0 4} [get_ports { clk }];#set
+
+set_property -dict { PACKAGE_PIN M20    IOSTANDARD LVCMOS33 } [get_ports { sw[0] }]; #IO_L7N_T1_AD2N_35 Sch=SW0
+set_property -dict { PACKAGE_PIN M19    IOSTANDARD LVCMOS33 } [get_ports { sw[1] }]; #IO_L7P_T1_AD2P_35 Sch=SW1
+```
+
+There's quite a lot to break down here.
+
+First, the `.xdc` file format is actually just [Tcl](https://en.wikipedia.org/wiki/Tcl_(programming_language)).
+Tcl is common amongst Vivado tooling.
+
+Next, let's look at `PACKAGE_PIN H16`. This defines the physical port on the FPGA. The `H16`, `M19`, and `M20` are grid
+coordinates that define the location on my FPGA's Ball Grid Array (BGA). Some simple FPGAs might only have a few pins,
+so they can get away with a linear naming scheme, but a more complex component will use BGA to mount to the board.
+
+`IOSTANDARD LVCMOS33` defines the IO standard for the port, obviously. 
+This is [LVCMOS](https://en.wikipedia.org/wiki/LVCMOS) (Low voltage complementary metal oxide semiconductor) at 3.3 volts.
+I don't know how this information is used during routing. I'm not going to play around with this, I'd rather not break it :D
+
+`get_ports { sw[0] }` is a Tcl procedure provided by Vivado that finds the logical port named `sw[0]`. The `sw` input
+will be defined as having 2 bits, and we can address each bit individually.

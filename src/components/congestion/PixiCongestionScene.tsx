@@ -269,7 +269,9 @@ class PixiScene {
 		label.anchor.set(0.5);
 		container.addChild(circle, label);
 		this.jobLayer.addChild(container);
-		const start = job.stage === "network" ? this.layout!.clients[job.client] ?? this.layout!.lb : target;
+		const start = job.stage === "network"
+			? { x: this.layout!.clientX + NODE_WIDTH / 2, y: this.layout!.clients[job.client]?.y ?? this.layout!.lb.y }
+			: target;
 		container.position.set(start.x, start.y);
 		return { container, from: start, to: target, progress: 0, durationMs: TICK_MS, removing: false };
 	}

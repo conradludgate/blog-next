@@ -9,20 +9,126 @@ export const meta = {
 
 Rate limits and concurrency limits are simple, useful tools. They also hide an awkward question: how did we decide what the limit should be?
 
-This post will work towards an answer by making the system interactive. Start with the experiment below. The clock runs continuously, but the interesting event should happen because you changed something.
+This post will work towards an answer by making the system interactive. The clock runs continuously, but every experiment should ask the reader to change something and watch the system answer.
+
+## 1. Start with a tiny service
+
+*Point:* Establish the little world: clients send jobs through a network and load balancer to four service workers. The load balancer’s internal algorithm is deliberately uninteresting; the service boundary is what matters.
+
+*CTA:* Let the simulation run, then add a worker and observe the extra capacity.
 
 <CongestionSimulator />
 
-## What this first experiment shows
+## 2. Make the work visible
 
-The service has four workers behind one bounded FIFO queue with room for sixteen requests. Each worker usually takes about a second, but its performance fluctuates a little from one moment to the next. The load balancer sends jobs into the shared queue, and a randomly chosen available worker picks up the oldest waiting job. The shared network path adds latency that the client cannot see directly. Each moving dot is a job: it leaves a specific client, crosses the network, waits in the queue, and is then picked up by a worker.
+*Point:* A request is not an abstract counter. It travels from a particular client, across a delayed network path, through the load balancer, into the shared bounded FIFO, and finally to one worker.
 
-With a rate limit, every client keeps sending at the same rate even when the service slows down. Adding clients multiplies the offered rate; once the shared queue fills, new jobs are rejected instead of waiting forever.
+*CTA:* Pause the clock and resume it while watching a job cross each stage.
 
-With a concurrency limit, the client keeps a fixed number of requests in flight. As observed latency rises, the client naturally sends less work. That is already a useful improvement—but it still needs a way to choose and adjust the concurrency limit.
+## 3. Name the health signals
 
-The three adaptive controllers make that choice continuously. AIMD increases its window cautiously and cuts it when a request is rejected. Vegas watches for extra delay before the queue fills. Gradient2 compares short- and long-term latency, looking for a trend rather than reacting to one noisy sample.
+*Point:* Introduce RED for request health—rate, errors, duration—and USE for resource health—utilisation, saturation, errors. The simulator should make these vocabulary words useful before introducing any controller.
 
-The adaptive clients also need to decide when to send. Each one turns its local target concurrency `L` and latency estimate `W` into a rate using Little's Law, `λ = L / W`. A small GCRA-style theoretical-arrival clock spaces those requests out, so the target window does not arrive as a burst. The pacing is implicit in the simulation; the visible thing is the work moving steadily through the network.
+*CTA:* Add workers and compare the queue, observed latency, and completed work rather than looking at only one number.
 
-The next iterations will add the metrics that help us understand the system—USE for resource health and RED for request health—and make the controller feedback visible in more detail.
+## 4. The fixed-rate baseline
+
+*Point:* A rate limiter answers only “how often may I start work?” It does not care whether the service is currently fast, slow, empty, or queued.
+
+*CTA:* Select Rate and let the dots run at the fixed per-client rate.
+
+## 5. Horizontal clients multiply the rate
+
+*Point:* A perfectly reasonable per-client rate becomes a system-wide problem when the client fleet grows. Eight clients at 0.5 jobs/s are already pressing against this deliberately small service.
+
+*CTA:* Add clients one at a time and watch the offered rate rise without any client changing its behaviour.
+
+## 6. The bounded queue has a job to do
+
+*Point:* The queue is bounded so overload becomes visible as rejection rather than an infinite latency tail. A queue can be below its hard limit and still be damaging latency.
+
+*CTA:* Keep adding clients until rejected jobs appear, then remove one and watch the queue recover.
+
+## 7. More servers change the answer
+
+*Point:* A fixed rate chosen for four workers is wrong when the service scales to eight, just as it is wrong when workers disappear. Static rate limits encode yesterday’s capacity.
+
+*CTA:* Add and remove workers while leaving the clients unchanged.
+
+## 8. Processing time is not constant
+
+*Point:* Each worker fluctuates around its normal performance. Even with the same arrival rate, small changes in service time change the amount of work in flight and the queueing delay.
+
+*CTA:* Leave the controller fixed and wait for worker performance to change; observe the delayed response rather than a button-labelled “slow service” event.
+
+## 9. Replace rate with work in flight
+
+*Point:* A concurrency limit bounds the number of requests the client has started but not finished. If requests take longer, the client naturally starts fewer new ones.
+
+*CTA:* Select Concurrency and compare its moving work level with the fixed-rate run under the same worker fluctuations.
+
+## 10. Little’s Law connects the measurements
+
+*Point:* In steady state, `L = λW`: concurrency is throughput multiplied by latency. This is not yet a controller; it is the relationship that lets us translate between a target window and a pacing rate.
+
+*CTA:* Hold the service steady and compare the observed sent rate, latency, and number of jobs in flight.
+
+## 11. Find the knee in the system
+
+*Point:* There is a useful operating point before the queue grows: enough concurrency to keep the workers busy, but not so much that latency starts paying for waiting work.
+
+*CTA:* Increase the offered work gradually and identify the moment latency begins to bend upward.
+
+## 12. AIMD learns from loss
+
+*Point:* AIMD probes upward and cuts its window when work is rejected. It is simple and robust, but rejection is a late signal: the queue has already filled before the client learns to retreat.
+
+*CTA:* Select AIMD, add clients until the queue rejects work, and watch the multiplicative decrease.
+
+## 13. Vegas listens to delay
+
+*Point:* Vegas estimates queueing from the difference between minimum RTT and sampled RTT. It can back off before the queue reaches its hard limit, trading some throughput for lower latency.
+
+*CTA:* Select Vegas and make the workers fluctuate; watch the client react to delay before rejection.
+
+## 14. Delay feedback is local
+
+*Point:* Every client has its own RTT history and its own controller. No client knows the other clients’ windows, so fairness is an emergent property of competing local feedback loops—not a global reset or shared counter.
+
+*CTA:* Add clients and compare how quickly their individual windows respond to the same shared queue.
+
+## 15. Why a clean minimum RTT is hard
+
+*Point:* A client that begins while the service is already queued may mistake a delayed request for its baseline. Variable worker time makes the distinction harder still; delay-based control needs a careful warm-up and smoothing strategy.
+
+*CTA:* Add clients while the queue is active, then remove them and watch which clients recover their baseline first.
+
+## 16. Gradient2 follows the trend
+
+*Point:* Gradient2 compares a responsive short-term RTT EWMA with a slower long-term EWMA. A rising gap is evidence that queueing is getting worse, so it can reduce the local target before a single noisy sample dominates the decision.
+
+*CTA:* Select Gradient2, perturb the worker population, and look for the short-term latency moving before the long-term one.
+
+## 17. Turn a window into a smooth sending rate
+
+*Point:* The controller’s target concurrency still needs an admission mechanism. Each client uses its local `L` and EWMA latency `W` to derive `λ = L / W`, then uses a GCRA-style theoretical-arrival clock to spread requests instead of emitting a burst.
+
+*CTA:* Compare the spacing of jobs under an adaptive controller with the burstier fixed-concurrency behaviour.
+
+## 18. Scaling without magical coordination
+
+*Point:* Adding a client creates a cold local controller; existing clients keep their own state. Removing one cancels or drains only that client’s work. The simulator must show the transient unfairness honestly rather than silently equalising windows.
+
+*CTA:* Scale the client population up and down while the system is moving, and follow the work belonging to the clients that changed.
+
+## 19. Read the whole system, not one metric
+
+*Point:* A controller can improve latency while reducing throughput, or increase utilisation while creating a queue. RED and USE together explain whether the system is healthy, saturated, rejecting, or simply underfed.
+
+*CTA:* Choose a controller, change workers and clients, and explain the resulting state using one RED signal and one USE signal.
+
+## 20. The final lesson
+
+*Point:* Rate limits, concurrency limits, Vegas, Gradient2, Little’s Law, and GCRA are not competing magic numbers. They are different pieces of a feedback loop: measure the system, estimate a safe operating point locally, and control when the next piece of work is allowed to enter.
+
+The rest of the article will turn these stubs into experiments one at a time. The simulator should remain the argument: every new idea earns its place by changing what the reader can see.

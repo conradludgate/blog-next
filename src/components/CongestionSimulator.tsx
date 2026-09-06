@@ -149,7 +149,7 @@ function advanceSimulation(current: SimulationState, mode: Mode): SimulationStat
 
 		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue" && job.service === worker);
 		if (nextJobIndex === -1) {
-			break;
+			continue;
 		}
 
 		jobs[nextJobIndex] = {

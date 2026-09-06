@@ -1,0 +1,512 @@
+export type ControllerKind = "rate" | "concurrency" | "aimd" | "vegas" | "gradient2";
+
+export type JobStage = "network" | "routing" | "queue" | "serviceDispatch" | "service";
+
+export interface ControllerState {
+	kind: ControllerKind;
+	limit: number;
+	minRtt: number;
+	shortRtt: number;
+	longRtt: number;
+	sampleCount: number;
+	rttSum: number;
+	warmupSamples: number;
+	gradient2ElapsedMs: number;
+	gradient2TrendSamples: number;
+	gradient2BackoffCooldown: number;
+}
+
+export interface ClientState {
+	controller: ControllerState;
+	tatMs: number;
+	metrics: ClientMetrics;
+}
+
+export interface ClientMetrics {
+	sentRate: number;
+	latencyMs: number;
+	rejectionRate: number;
+	sentInWindow: number;
+	sentWindowMs: number;
+}
+
+export interface Job {
+	id: number;
+	client: number;
+	stage: JobStage;
+	remainingMs: number;
+	createdAt: number;
+	service?: number;
+	queueSlot?: number;
+}
+
+export interface SimulationState {
+	strategy: ControllerKind;
+	clients: ClientState[];
+	workers: number;
+	serviceMs: number;
+	networkMs: number;
+	workerPerformance: number[];
+	jobs: Job[];
+	nextJobId: number;
+	queueDepth: number;
+	latencyMs: number;
+	dropped: number;
+	completed: number;
+	sentRate: number;
+	nowMs: number;
+}
+
+export const SHARED_QUEUE_LIMIT = 16;
+export const MAX_CLIENTS = 8;
+export const MAX_WORKERS = 8;
+export const TICK_MS = 250;
+export const ROUTING_MS = 500;
+export const WORKER_TRAVEL_MS = 350;
+export const BASELINE_LATENCY_MS = 2750;
+export const RATE_PER_CLIENT = 0.5;
+export const FIXED_CONCURRENCY_PER_CLIENT = 4;
+export const MAX_CONTROLLER_LIMIT = 16;
+export const METRIC_EWMA_ALPHA = 0.2;
+export const METRIC_SAMPLE_WINDOW_MS = 2000;
+
+// These values are deliberately tuned for the simulator's small, slow system:
+// four workers, roughly 4 jobs/s of capacity, and a ~2.75s unloaded RTT.
+export const VEGAS_SAMPLE_SIZE = 4;
+export const VEGAS_ALPHA = 0.25;
+export const VEGAS_BETA = 0.75;
+export const GRADIENT2_SAMPLE_SIZE = 1;
+export const GRADIENT2_SHORT_ALPHA = 0.35;
+export const GRADIENT2_LONG_ALPHA = 0.08;
+export const GRADIENT2_RISING_THRESHOLD = 1.05;
+export const GRADIENT2_STABLE_THRESHOLD = 1.02;
+export const GRADIENT2_TREND_SAMPLES = 3;
+export const GRADIENT2_PROBE_STEP = 1;
+export const GRADIENT2_LIMIT_ALPHA = 0.35;
+export const GRADIENT2_BACKOFF_FACTOR = 0.8;
+export const GRADIENT2_BACKOFF_COOLDOWN = 8;
+export const GRADIENT2_MAX_LIMIT = 12;
+export const GRADIENT2_CONTROL_INTERVAL_MS = 1000;
+export const GRADIENT2_TARGET_QUEUE = 0.75;
+export const GCRA_STARTUP_RATE = 1;
+export const GCRA_STARTUP_SAMPLES = 8;
+export const GCRA_MAX_RATE = 4;
+
+function createController(kind: ControllerKind): ControllerState {
+	return {
+		kind,
+		// Adaptive clients begin with one request so their first RTT samples can
+		// establish an unloaded baseline before they probe for more capacity.
+		limit: kind === "concurrency" ? FIXED_CONCURRENCY_PER_CLIENT : 1,
+		minRtt: Number.POSITIVE_INFINITY,
+		shortRtt: 0,
+		longRtt: 0,
+		sampleCount: 0,
+		rttSum: 0,
+		warmupSamples: 0,
+		gradient2ElapsedMs: 0,
+		gradient2TrendSamples: 0,
+		gradient2BackoffCooldown: 0,
+	};
+}
+
+function createClient(kind: ControllerKind): ClientState {
+	return {
+		controller: createController(kind),
+		tatMs: 0,
+		metrics: {
+			sentRate: 0,
+			latencyMs: BASELINE_LATENCY_MS,
+			rejectionRate: 0,
+			sentInWindow: 0,
+			sentWindowMs: 0,
+		},
+	};
+}
+
+export function createInitialState(strategy: ControllerKind = "rate"): SimulationState {
+	return {
+		strategy,
+		clients: [createClient(strategy)],
+		workers: 4,
+		serviceMs: 1000,
+		networkMs: 900,
+		workerPerformance: [1, 1, 1, 1],
+		jobs: [],
+		nextJobId: 1,
+		queueDepth: 0,
+		latencyMs: BASELINE_LATENCY_MS,
+		dropped: 0,
+		completed: 0,
+		sentRate: 0,
+		nowMs: 0,
+	};
+}
+
+function randomWorker(workerCount: number): number {
+	return Math.floor(Math.random() * workerCount);
+}
+
+function randomPerformance(): number {
+	return 0.75 + Math.random() * 0.5;
+}
+
+function fluctuatePerformance(performance: number): number {
+	const meanReversion = (1 - performance) * 0.08;
+	const jitter = (Math.random() - 0.5) * 0.08;
+	return clamp(performance + meanReversion + jitter, 0.75, 1.25);
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+	return Math.max(minimum, Math.min(maximum, value));
+}
+
+export function serviceCapacity(state: SimulationState, performance = state.workerPerformance): number {
+	const capacity = performance.reduce(
+		(total, factor) => total + 1000 / (state.serviceMs * factor),
+		0,
+	);
+
+	return Math.max(1, Math.floor(capacity));
+}
+
+function updateController(controller: ControllerState, rttMs: number | undefined, dropped: boolean): ControllerState {
+	if (controller.kind === "rate" || controller.kind === "concurrency") {
+		return controller;
+	}
+
+	const hasRttSample = rttMs !== undefined && Number.isFinite(rttMs);
+	const next = {
+		...controller,
+		minRtt: hasRttSample ? Math.min(controller.minRtt, rttMs) : controller.minRtt,
+		sampleCount: controller.sampleCount + (hasRttSample ? 1 : 0),
+		rttSum: controller.rttSum + (hasRttSample ? rttMs : 0),
+		warmupSamples: controller.warmupSamples + (hasRttSample && !dropped ? 1 : 0),
+	};
+
+	if (dropped) {
+		return {
+			...next,
+			limit: clamp(next.limit * (controller.kind === "gradient2" ? 0.7 : 0.5), 1, MAX_CONTROLLER_LIMIT),
+			gradient2TrendSamples: 0,
+			gradient2BackoffCooldown: controller.kind === "gradient2" ? GRADIENT2_BACKOFF_COOLDOWN : 0,
+			gradient2ElapsedMs: controller.kind === "gradient2" ? 0 : controller.gradient2ElapsedMs,
+		};
+	}
+
+	if (controller.kind === "aimd") {
+		return { ...next, limit: clamp(controller.limit + 1 / Math.max(1, controller.limit), 1, MAX_CONTROLLER_LIMIT) };
+	}
+
+	if (controller.kind === "vegas") {
+		if (next.sampleCount < VEGAS_SAMPLE_SIZE) {
+			return next;
+		}
+
+		const averageRtt = next.rttSum / next.sampleCount;
+		const queueEstimate = next.limit * (1 - next.minRtt / averageRtt);
+		const limit = queueEstimate < VEGAS_ALPHA
+			? next.limit + 1
+			: queueEstimate > VEGAS_BETA
+				? next.limit - 1
+				: next.limit;
+
+		return { ...next, limit: clamp(limit, 1, MAX_CONTROLLER_LIMIT), sampleCount: 0, rttSum: 0 };
+	}
+
+	const shortRtt = hasRttSample
+		? next.shortRtt === 0 ? rttMs : ewma(next.shortRtt, rttMs, GRADIENT2_SHORT_ALPHA)
+		: next.shortRtt;
+	const longRtt = hasRttSample
+		? next.longRtt === 0 ? rttMs : ewma(next.longRtt, rttMs, GRADIENT2_LONG_ALPHA)
+		: next.longRtt;
+	if (shortRtt === 0 || (hasRttSample && next.sampleCount < GRADIENT2_SAMPLE_SIZE)) {
+		return { ...next, shortRtt, longRtt };
+	}
+	if (next.gradient2ElapsedMs < GRADIENT2_CONTROL_INTERVAL_MS) {
+		return { ...next, shortRtt, longRtt };
+	}
+
+	const cooldown = Math.max(0, next.gradient2BackoffCooldown - 1);
+	const divergence = shortRtt / Math.max(longRtt, 1);
+	// A backoff starts a new observation period. Do not keep accumulating the
+	// old trend while cooling down. Queue pressure is evaluated separately so a
+	// high-limit client continues to correct even after its RTT trend flattens.
+	const trendSamples = cooldown > 0
+		? 0
+		: divergence >= GRADIENT2_RISING_THRESHOLD
+			? next.gradient2TrendSamples + 1
+			: divergence <= GRADIENT2_STABLE_THRESHOLD
+				? Math.max(0, next.gradient2TrendSamples - 1)
+				: next.gradient2TrendSamples;
+	const queueEstimate = next.limit * (1 - next.minRtt / Math.max(shortRtt, 1));
+	const backingOff = cooldown === 0 && (
+		trendSamples >= GRADIENT2_TREND_SAMPLES
+		|| queueEstimate > GRADIENT2_TARGET_QUEUE
+	);
+	// After a backoff, stable trend is enough to resume a slow additive probe.
+	// Requiring the absolute RTT to return to baseline here permanently starves
+	// a cold client when another client keeps the shared queue warm.
+	const probing = cooldown === 0 && divergence <= GRADIENT2_STABLE_THRESHOLD && !backingOff;
+	// A rising RTT is not just a boolean congestion signal. The ratio to the
+	// client's own minimum RTT tells us how far its target overshot the current
+	// operating point. Applying that ratio to the local limit makes a large,
+	// aggressive client give up proportionally more work than a small client.
+	const delayBackoffFactor = Math.min(
+		GRADIENT2_BACKOFF_FACTOR,
+		next.minRtt / Math.max(shortRtt, 1),
+	);
+	const targetLimit = backingOff
+		? next.limit * delayBackoffFactor
+		: probing
+			? next.limit + GRADIENT2_PROBE_STEP
+			: next.limit;
+
+	return {
+		...next,
+		limit: clamp(ewma(next.limit, targetLimit, GRADIENT2_LIMIT_ALPHA), 1, GRADIENT2_MAX_LIMIT),
+		shortRtt,
+		longRtt,
+		gradient2TrendSamples: backingOff ? 0 : trendSamples,
+		gradient2BackoffCooldown: backingOff ? GRADIENT2_BACKOFF_COOLDOWN : cooldown,
+		gradient2ElapsedMs: 0,
+		sampleCount: 0,
+		rttSum: 0,
+	};
+}
+
+function clientLimit(client: ClientState, strategy: ControllerKind): number {
+	if (strategy === "concurrency") {
+		return FIXED_CONCURRENCY_PER_CLIENT;
+	}
+
+	return Math.max(1, Math.floor(client.controller.limit));
+}
+
+function ewma(previous: number, sample: number, alpha = METRIC_EWMA_ALPHA): number {
+	return previous + alpha * (sample - previous);
+}
+
+function clientRate(client: ClientState, strategy: ControllerKind): number {
+	if (strategy === "rate") {
+		return RATE_PER_CLIENT;
+	}
+	if (strategy === "concurrency") {
+		return 0;
+	}
+
+	const lawRate = client.controller.limit * (1000 / Math.max(client.metrics.latencyMs, 1));
+	const startupProbe = client.controller.warmupSamples < GCRA_STARTUP_SAMPLES ? GCRA_STARTUP_RATE : 0;
+	return clamp(Math.max(lawRate, startupProbe), 0.1, GCRA_MAX_RATE);
+}
+
+function updateClients(
+	clients: ClientState[],
+	samples: Array<{ client: number; rttMs: number; dropped: boolean }>,
+	sentByClient: number[],
+): ClientState[] {
+	return clients.map((client, index) => {
+		const clientSamples = samples.filter((sample) => sample.client === index);
+		const successfulSamples = clientSamples.filter((sample) => !sample.dropped);
+		const droppedCount = clientSamples.length - successfulSamples.length;
+		const averageRtt = successfulSamples.length > 0
+			? successfulSamples.reduce((total, sample) => total + sample.rttMs, 0) / successfulSamples.length
+			: client.metrics.latencyMs;
+		const requestCount = clientSamples.length;
+		const rejectionRate = requestCount > 0 ? droppedCount / requestCount : 0;
+		const sentInWindow = client.metrics.sentInWindow + sentByClient[index];
+		const sentWindowMs = client.metrics.sentWindowMs + TICK_MS;
+		const hasRateSample = sentWindowMs >= METRIC_SAMPLE_WINDOW_MS;
+		let controller = {
+			...client.controller,
+			gradient2ElapsedMs: client.controller.gradient2ElapsedMs + TICK_MS,
+		};
+		controller = clientSamples.reduce(
+			(current, sample) => updateController(current, sample.rttMs, sample.dropped),
+			controller,
+		);
+		// Gradient2 changes its target on a wall-clock cadence, not once per
+		// completion. This gives a high-RPS client and a low-RPS client the same
+		// number of probe opportunities while each still supplies its own RTT.
+		if (controller.kind === "gradient2") {
+			controller = updateController(controller, undefined, false);
+		}
+
+		return {
+			...client,
+			controller,
+			metrics: {
+				sentRate: hasRateSample
+					? ewma(client.metrics.sentRate, sentInWindow * (1000 / sentWindowMs))
+					: client.metrics.sentRate,
+				latencyMs: successfulSamples.length > 0 ? ewma(client.metrics.latencyMs, averageRtt) : client.metrics.latencyMs,
+				rejectionRate: ewma(client.metrics.rejectionRate, rejectionRate),
+				sentInWindow: hasRateSample ? 0 : sentInWindow,
+				sentWindowMs: hasRateSample ? 0 : sentWindowMs,
+			},
+		};
+	});
+}
+
+export function setStrategy(current: SimulationState, strategy: ControllerKind): SimulationState {
+	const next = createInitialState(strategy);
+	return {
+		...next,
+		workers: current.workers,
+		workerPerformance: current.workerPerformance.slice(0, current.workers),
+		clients: current.clients.map(() => createClient(strategy)),
+	};
+}
+
+export function setClientCount(current: SimulationState, count: number): SimulationState {
+	const clients = clamp(count, 1, MAX_CLIENTS);
+	if (clients === current.clients.length) {
+		return current;
+	}
+
+	const resizedClients = current.clients.length < clients
+		? [...current.clients, ...Array.from({ length: clients - current.clients.length }, () => createClient(current.strategy))]
+		: current.clients.slice(0, clients);
+	const removedJobs = current.jobs.filter((job) => job.client >= clients);
+	const jobs = current.jobs.filter((job) => job.client < clients);
+
+	return { ...current, clients: resizedClients, jobs, dropped: current.dropped + removedJobs.length };
+}
+
+export function setWorkerCount(current: SimulationState, count: number): SimulationState {
+	const workers = clamp(count, 1, MAX_WORKERS);
+	if (workers === current.workers) {
+		return current;
+	}
+
+	const workerPerformance = workers > current.workers
+		? [...current.workerPerformance, ...Array.from({ length: workers - current.workers }, randomPerformance)]
+		: current.workerPerformance.slice(0, workers);
+	const jobs = current.jobs.map((job) => (
+		job.service !== undefined && job.service >= workers
+			? { ...job, stage: "network" as const, service: undefined, queueSlot: undefined, remainingMs: current.networkMs }
+			: job
+	));
+
+	return { ...current, workers, workerPerformance, jobs, queueDepth: jobs.filter((job) => job.stage === "queue").length };
+}
+
+export function advanceSimulation(current: SimulationState): SimulationState {
+	const nowMs = current.nowMs + TICK_MS;
+	const workerPerformance = current.workerPerformance.map(fluctuatePerformance);
+	const completedSamples: Array<{ client: number; rttMs: number; dropped: boolean }> = [];
+	const progressedJobs = current.jobs
+		.map((job): Job | null => {
+			const remainingMs = job.remainingMs - TICK_MS;
+
+			if (job.stage === "service" && remainingMs <= 0) {
+				completedSamples.push({ client: job.client, rttMs: nowMs - job.createdAt, dropped: false });
+				return null;
+			}
+
+			if (job.stage === "network" && remainingMs <= 0) {
+				return { ...job, stage: "routing", service: undefined, remainingMs: ROUTING_MS };
+			}
+
+			if (job.stage === "routing" && remainingMs <= 0) {
+				return { ...job, stage: "queue", remainingMs: 0 };
+			}
+
+			if (job.stage === "serviceDispatch" && remainingMs <= 0) {
+				return { ...job, stage: "service", remainingMs: Math.max(100, Math.round(current.serviceMs * workerPerformance[job.service ?? 0])) };
+			}
+
+			return { ...job, remainingMs };
+		})
+		.filter((job): job is Job => job !== null);
+
+	let jobs = [...progressedJobs];
+	const waitingJobs = jobs.filter((job) => job.stage === "queue");
+	const rejectedJobs = waitingJobs.slice(SHARED_QUEUE_LIMIT);
+	for (const job of rejectedJobs) {
+		completedSamples.push({ client: job.client, rttMs: nowMs - job.createdAt, dropped: true });
+	}
+	const rejectedIds = new Set(rejectedJobs.map((job) => job.id));
+	jobs = jobs.filter((job) => !rejectedIds.has(job.id));
+
+	const occupiedWorkers = new Set(
+		jobs
+			.filter((job) => (job.stage === "service" || job.stage === "serviceDispatch") && job.service !== undefined)
+			.map((job) => job.service),
+	);
+	const availableWorkers = Array.from({ length: current.workers }, (_, worker) => worker)
+		.filter((worker) => !occupiedWorkers.has(worker));
+	let dispatchedJobs = 0;
+	while (availableWorkers.length > 0) {
+		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue");
+		if (nextJobIndex === -1) {
+			break;
+		}
+
+		const workerPosition = randomWorker(availableWorkers.length);
+		const [worker] = availableWorkers.splice(workerPosition, 1);
+		jobs[nextJobIndex] = {
+			...jobs[nextJobIndex],
+			stage: "serviceDispatch",
+			service: worker,
+			queueSlot: dispatchedJobs,
+			remainingMs: WORKER_TRAVEL_MS,
+		};
+		dispatchedJobs += 1;
+	}
+
+	const sentByClient = current.clients.map(() => 0);
+	let nextJobId = current.nextJobId;
+	const tats = current.clients.map((client) => client.tatMs);
+	const inFlights = current.clients.map((_, clientIndex) => jobs.filter((job) => job.client === clientIndex).length);
+	let admitted = true;
+	while (admitted) {
+		admitted = false;
+		// Interleave admissions so the shared FIFO reflects fair arrival order rather
+		// than whichever client happens to be first in the array.
+		current.clients.forEach((client, clientIndex) => {
+			const limit = clientLimit(client, current.strategy);
+			if (current.strategy !== "concurrency") {
+				const intervalMs = 1000 / clientRate(client, current.strategy);
+				// A rate increase should be visible immediately; do not let a previous,
+				// slower TAT postpone the first request at the new rate.
+				if (tats[clientIndex] > nowMs + intervalMs) {
+					tats[clientIndex] = nowMs + intervalMs;
+				}
+			}
+			const shouldSend = current.strategy === "concurrency" ? inFlights[clientIndex] < limit : nowMs >= tats[clientIndex];
+			if (!shouldSend) return;
+
+			jobs.push({ id: nextJobId, client: clientIndex, stage: "network", remainingMs: current.networkMs, createdAt: nowMs });
+			nextJobId += 1;
+			sentByClient[clientIndex] += 1;
+			if (current.strategy === "concurrency") {
+				inFlights[clientIndex] += 1;
+			} else {
+				const intervalMs = 1000 / clientRate(client, current.strategy);
+				tats[clientIndex] = Math.max(tats[clientIndex], current.nowMs) + intervalMs;
+			}
+			admitted = true;
+		});
+	}
+	const clientsWithJobs = current.clients.map((client, clientIndex) => ({ ...client, tatMs: tats[clientIndex] }));
+	const clients = updateClients(clientsWithJobs, completedSamples, sentByClient);
+
+	const queueDepth = jobs.filter((job) => job.stage === "queue").length;
+	const sentRate = clients.reduce((total, client) => total + client.metrics.sentRate, 0);
+	const latencyMs = clients.reduce((total, client) => total + client.metrics.latencyMs, 0) / clients.length;
+
+	return {
+		...current,
+		clients,
+		workerPerformance,
+		jobs,
+		nextJobId,
+		queueDepth,
+		latencyMs,
+		dropped: current.dropped + rejectedJobs.length,
+		completed: current.completed + completedSamples.filter((sample) => !sample.dropped).length,
+		sentRate,
+		nowMs,
+	};
+}

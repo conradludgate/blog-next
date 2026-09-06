@@ -10,7 +10,9 @@
 	background: var(--color-bg-secondary);
 }
 
-.Header {
+.Header,
+.NodeHeader,
+.Footer {
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
@@ -65,7 +67,8 @@
 
 .Play,
 .ModeSwitcher button,
-.Actions button {
+.Stepper button,
+.Reset {
 	padding: 0.45rem 0.65rem;
 	border: 1px solid var(--sim-border);
 	border-radius: 0.35rem;
@@ -77,8 +80,15 @@
 
 .Play:hover,
 .ModeSwitcher button:hover,
-.Actions button:hover {
+.Stepper button:hover,
+.Reset:hover {
 	border-color: var(--sim-accent);
+}
+
+.Play:disabled,
+.Stepper button:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
 }
 
 .ModeSwitcher {
@@ -99,24 +109,9 @@
 	font-size: 0.9rem;
 }
 
-.Actions {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 0.4rem;
-	margin-top: 1rem;
-	padding-top: 0.85rem;
-	border-top: 1px solid var(--sim-border);
-}
-
-.Actions .Reset {
-	margin-left: auto;
-	color: var(--sim-muted);
-}
-
 .System {
 	display: grid;
-	grid-template-columns: 1.2fr 0.8fr 0.8fr 0.8fr 1.2fr;
+	grid-template-columns: 1.2fr 0.65fr 0.9fr 0.65fr 1.2fr;
 	align-items: center;
 	gap: 0.55rem;
 	margin-top: 1.1rem;
@@ -145,15 +140,34 @@
 	background: var(--sim-accent-soft);
 }
 
+.Stepper {
+	display: flex;
+	gap: 0.2rem;
+}
+
+.Stepper button {
+	width: 1.5rem;
+	height: 1.5rem;
+	padding: 0;
+	line-height: 1;
+}
+
 .NodeValue {
 	font-size: 1.55rem;
 	font-variant-numeric: tabular-nums;
 	line-height: 1;
 }
 
+.NodeValue small {
+	color: var(--sim-muted);
+	font-size: 0.8rem;
+	font-weight: 400;
+}
+
 .NodeDetail,
 .Link,
-.Metrics span {
+.Metrics span,
+.Footer p {
 	color: var(--sim-muted);
 	font-size: 0.78rem;
 }
@@ -175,6 +189,7 @@
 	border-radius: 0.12rem;
 	background: var(--sim-accent);
 	opacity: 0.55;
+	transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
 .Clients b {
@@ -183,7 +198,7 @@
 }
 
 .BusyWorker {
-	opacity: 1 !important;
+	box-shadow: 0 0 0 2px var(--sim-accent-soft);
 }
 
 .Link {
@@ -245,10 +260,18 @@
 	font-variant-numeric: tabular-nums;
 }
 
-.Hint {
-	margin: 0.75rem 0 0;
+.Footer {
+	align-items: center;
+	margin-top: 0.75rem;
+}
+
+.Footer p {
+	margin: 0;
+}
+
+.Reset {
+	flex: 0 0 auto;
 	color: var(--sim-muted);
-	font-size: 0.85rem;
 }
 
 @media only screen and (max-width: 700px) {
@@ -273,17 +296,14 @@
 		transform: rotate(90deg);
 	}
 
-	.Actions .Reset {
-		margin-left: 0;
+	.Footer {
+		align-items: flex-start;
+		flex-direction: column;
 	}
 }
 
 @media only screen and (max-width: 430px) {
 	.Metrics {
 		grid-template-columns: 1fr;
-	}
-
-	.Metrics > div {
-		padding-block: 0.5rem;
 	}
 }

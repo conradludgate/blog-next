@@ -15,7 +15,7 @@ This post will work towards an answer by making the system interactive. Start wi
 
 ## What this first experiment shows
 
-The service has a small FIFO queue in front of four workers. Each request takes 250ms when the service is healthy, so the service can complete roughly 16 requests per second. The shared network and load-balancer path adds another 80ms to what the client observes.
+The service has a small FIFO queue with room for twelve requests in front of four workers. Each worker usually takes 250ms, but its performance fluctuates a little from one moment to the next. The shared network and load-balancer path adds latency that the client cannot see directly.
 
 With a rate limit, every client keeps sending at the same rate even when the service slows down. Adding clients multiplies the offered rate, and the queue can grow without bound.
 

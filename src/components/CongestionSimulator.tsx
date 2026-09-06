@@ -10,20 +10,23 @@ interface SimulationState {
 	workers: number;
 	serviceMs: number;
 	networkMs: number;
+	workerPerformance: number[];
 	queue: number;
 	latencyMs: number;
-	completed: number;
+	dropped: number;
 	seconds: number;
 }
 
+const QUEUE_LIMIT = 12;
 const INITIAL_STATE: SimulationState = {
 	clients: 1,
 	workers: 4,
 	serviceMs: 250,
 	networkMs: 80,
+	workerPerformance: [1, 1, 1, 1],
 	queue: 0,
 	latencyMs: 330,
-	completed: 0,
+	dropped: 0,
 	seconds: 0,
 };
 
@@ -44,32 +47,62 @@ function offeredRequests(state: SimulationState, mode: Mode): number {
 	);
 }
 
+function serviceCapacity(state: SimulationState, performance = state.workerPerformance): number {
+	const capacity = performance.reduce(
+		(total, factor) => total + 1000 / (state.serviceMs * factor),
+		0,
+	);
+
+	return Math.max(1, Math.floor(capacity));
+}
+
+function randomPerformance(): number {
+	return 0.75 + Math.random() * 0.5;
+}
+
+function fluctuatePerformance(performance: number): number {
+	return Math.max(0.7, Math.min(1.35, performance * (0.9 + Math.random() * 0.2)));
+}
+
 function advanceSimulation(current: SimulationState, mode: Mode): SimulationState {
-	const offered = offeredRequests(current, mode);
-	const capacity = Math.max(1, Math.floor((1000 / current.serviceMs) * current.workers));
+	const workerPerformance = current.workerPerformance.map(fluctuatePerformance);
+	const next = { ...current, workerPerformance };
+	const offered = offeredRequests(next, mode);
+	const capacity = serviceCapacity(next);
 	const waiting = current.queue + offered;
 	const completed = Math.min(waiting, capacity);
-	const queue = waiting - completed;
+	const remaining = waiting - completed;
+	const queue = Math.min(QUEUE_LIMIT, remaining);
 
 	return {
-		...current,
+		...next,
 		queue,
 		latencyMs: current.networkMs + current.serviceMs + Math.round((queue / current.workers) * current.serviceMs),
-		completed: current.completed + completed,
+		dropped: current.dropped + remaining - queue,
 		seconds: current.seconds + 1,
 	};
 }
 
 function getMetrics(state: SimulationState, mode: Mode) {
 	const offered = offeredRequests(state, mode);
-	const capacity = Math.max(1, Math.floor((1000 / state.serviceMs) * state.workers));
-	const queueShare = Math.min(100, Math.round((state.queue / Math.max(1, state.queue + capacity)) * 100));
-	const busyWorkers = Math.min(
-		state.workers,
-		Math.max(0, Math.ceil((Math.min(offered, capacity) * state.serviceMs) / 1000)),
-	);
+	const capacity = serviceCapacity(state);
+	const queueShare = Math.min(100, Math.round((state.queue / QUEUE_LIMIT) * 100));
+	let busyWorkers = 0;
+	let remaining = Math.min(offered, capacity);
+
+	for (const performance of state.workerPerformance) {
+		if (remaining <= 0) {
+			break;
+		}
+		remaining -= 1000 / (state.serviceMs * performance);
+		busyWorkers += 1;
+	}
 
 	return { offered, capacity, queueShare, busyWorkers };
+}
+
+function performanceOpacity(performance: number): number {
+	return Math.max(0.45, Math.min(1, 1.35 - performance));
 }
 
 export default function CongestionSimulator() {
@@ -93,6 +126,24 @@ export default function CongestionSimulator() {
 	function changeMode(nextMode: Mode) {
 		setMode(nextMode);
 		setState(INITIAL_STATE);
+	}
+
+	function changeClients(delta: number) {
+		setState((current) => ({
+			...current,
+			clients: Math.max(1, Math.min(8, current.clients + delta)),
+		}));
+	}
+
+	function changeWorkers(delta: number) {
+		setState((current) => {
+			const workers = Math.max(1, Math.min(8, current.workers + delta));
+			const workerPerformance = delta > 0
+				? [...current.workerPerformance, randomPerformance()]
+				: current.workerPerformance.slice(0, workers);
+
+			return { ...current, workers, workerPerformance };
+		});
 	}
 
 	function reset() {
@@ -147,28 +198,15 @@ export default function CongestionSimulator() {
 					: `${CONCURRENCY_PER_CLIENT} requests in flight per client, using latency as feedback.`}
 			</p>
 
-			<div className={styles.Actions} role="group" aria-label="Change the system">
-				<span className={styles.ActionLabel}>Change the system</span>
-				<button type="button" onClick={() => setState((current) => ({ ...current, clients: Math.min(8, current.clients + 1) }))}>
-					Add client
-				</button>
-				<button type="button" onClick={() => setState((current) => ({ ...current, workers: Math.min(8, current.workers + 1) }))}>
-					Add worker
-				</button>
-				<button type="button" onClick={() => setState((current) => ({ ...current, serviceMs: Math.min(1000, current.serviceMs + 250) }))}>
-					Slow service
-				</button>
-				<button type="button" onClick={() => setState((current) => ({ ...current, networkMs: Math.min(500, current.networkMs + 40) }))}>
-					Add delay
-				</button>
-				<button type="button" className={styles.Reset} onClick={reset}>
-					Reset
-				</button>
-			</div>
-
 			<div className={styles.System} role="img" aria-label="Request path from clients through the network and FIFO queue to service workers">
 				<div className={styles.Node}>
-					<span className={styles.NodeLabel}>Clients</span>
+					<div className={styles.NodeHeader}>
+						<span className={styles.NodeLabel}>Clients</span>
+						<div className={styles.Stepper}>
+							<button type="button" aria-label="Remove client" disabled={state.clients === 1} onClick={() => changeClients(-1)}>−</button>
+							<button type="button" aria-label="Add client" disabled={state.clients === 8} onClick={() => changeClients(1)}>+</button>
+						</div>
+					</div>
 					<strong className={styles.NodeValue}>{state.clients}</strong>
 					<span className={styles.NodeDetail}>{state.clients === 1 ? "instance" : "instances"} · {mode === "rate" ? `${RATE_PER_CLIENT}/s each` : `${CONCURRENCY_PER_CLIENT} in flight each`}</span>
 					<div className={styles.Clients} aria-hidden="true">
@@ -177,33 +215,36 @@ export default function CongestionSimulator() {
 					</div>
 				</div>
 
-				<div className={styles.Link}>
+				<div className={styles.Link} aria-hidden="true">
 					<span>Network / LB</span>
-					<div className={styles.LinkLine} aria-hidden="true"><i /><i /><i /></div>
-					<small>{state.networkMs}ms delay</small>
+					<div className={styles.LinkLine}><i /><i /><i /></div>
 				</div>
 
 				<div className={`${styles.Queue} ${state.queue > 0 ? styles.QueueActive : ""}`}>
 					<span className={styles.NodeLabel}>FIFO queue</span>
-					<strong className={styles.NodeValue}>{state.queue}</strong>
-					<span className={styles.NodeDetail}>waiting</span>
+					<strong className={styles.NodeValue}>{state.queue}<small> / {QUEUE_LIMIT}</small></strong>
+					<span className={styles.NodeDetail}>{state.dropped} rejected</span>
 					<div className={styles.Track} aria-hidden="true">
 						<div className={styles.QueueFill} style={{ width: `${state.queue === 0 ? 0 : Math.max(10, metrics.queueShare)}%` }} />
 					</div>
 				</div>
 
-				<div className={styles.Link}>
-					<span>Service path</span>
-					<div className={styles.LinkLine} aria-hidden="true"><i /><i /><i /></div>
-					<small>{state.serviceMs}ms each</small>
+				<div className={styles.Link} aria-hidden="true">
+					<div className={styles.LinkLine}><i /><i /><i /></div>
 				</div>
 
 				<div className={styles.Node}>
-					<span className={styles.NodeLabel}>Service</span>
+					<div className={styles.NodeHeader}>
+						<span className={styles.NodeLabel}>Service</span>
+						<div className={styles.Stepper}>
+							<button type="button" aria-label="Remove worker" disabled={state.workers === 1} onClick={() => changeWorkers(-1)}>−</button>
+							<button type="button" aria-label="Add worker" disabled={state.workers === 8} onClick={() => changeWorkers(1)}>+</button>
+						</div>
+					</div>
 					<strong className={styles.NodeValue}>{state.workers}</strong>
 					<span className={styles.NodeDetail}>{state.workers === 1 ? "worker" : "workers"} · {metrics.capacity}/s capacity</span>
 					<div className={styles.Workers} aria-hidden="true">
-						{Array.from({ length: state.workers }, (_, index) => <span key={index} className={index < metrics.busyWorkers ? styles.BusyWorker : ""} />)}
+						{state.workerPerformance.map((performance, index) => <span key={index} className={index < metrics.busyWorkers ? styles.BusyWorker : ""} style={{ opacity: performanceOpacity(performance) }} />)}
 					</div>
 				</div>
 			</div>
@@ -211,12 +252,13 @@ export default function CongestionSimulator() {
 			<div className={styles.Metrics} aria-live="polite">
 				<div><span>Offered rate</span><strong>{metrics.offered}/s</strong></div>
 				<div><span>Observed latency</span><strong>{state.latencyMs}ms</strong></div>
-				<div><span>Queued work</span><strong>{state.queue}</strong></div>
+				<div><span>Rejected</span><strong>{state.dropped}</strong></div>
 			</div>
 
-			<p className={styles.Hint}>
-				The clock runs by itself. Add a client or slow the service to create pressure, then watch the path and metrics respond.
-			</p>
+			<div className={styles.Footer}>
+				<p>The clock runs by itself. Add or remove clients and workers to create pressure, then watch the finite queue respond.</p>
+				<button type="button" className={styles.Reset} onClick={reset}>Reset</button>
+			</div>
 		</section>
 	);
 }

@@ -21,4 +21,6 @@ With a rate limit, every client keeps sending at the same rate even when the ser
 
 With a concurrency limit, the client keeps a fixed number of requests in flight. As observed latency rises, the client naturally sends less work. That is already a useful improvement—but it still needs a way to choose and adjust the concurrency limit.
 
-The next iterations will add the metrics that help us understand the system—USE for resource health and RED for request health—then use the same surface to explore client-side congestion controllers such as Vegas and Gradient2.
+The three adaptive controllers make that choice continuously. AIMD increases its window cautiously and cuts it when a request is rejected. Vegas watches for extra delay before the queue fills. Gradient2 compares short- and long-term latency, looking for a trend rather than reacting to one noisy sample.
+
+The next iterations will add the metrics that help us understand the system—USE for resource health and RED for request health—and make the controller feedback visible in more detail.

@@ -2,189 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "@/styles/CongestionSimulator.module.css";
-
-type Mode = "rate" | "concurrency";
-
-interface SimulationState {
-	clients: number;
-	workers: number;
-	serviceMs: number;
-	networkMs: number;
-	workerPerformance: number[];
-	jobs: Job[];
-	nextJobId: number;
-	arrivalCredit: number;
-	queue: number;
-	latencyMs: number;
-	dropped: number;
-	seconds: number;
-}
-
-type JobStage = "network" | "routing" | "queue" | "serviceDispatch" | "service";
-
-interface Job {
-	id: number;
-	client: number;
-	stage: JobStage;
-	remainingMs: number;
-	service?: number;
-}
-
-const QUEUE_LIMIT_PER_WORKER = 4;
-const TICK_MS = 250;
-const ROUTING_MS = 500;
-const WORKER_TRAVEL_MS = 350;
-const INITIAL_STATE: SimulationState = {
-	clients: 1,
-	workers: 4,
-	serviceMs: 1000,
-	networkMs: 900,
-	workerPerformance: [1, 1, 1, 1],
-		jobs: [],
-	nextJobId: 1,
-	arrivalCredit: 0,
-	queue: 0,
-	latencyMs: 1900,
-	dropped: 0,
-	seconds: 0,
-};
-
-const RATE_PER_CLIENT = 0.5;
-const CONCURRENCY_PER_CLIENT = 4;
-const MAX_OFFERED_RATE = 4;
-
-function offeredRequests(state: SimulationState, mode: Mode): number {
-	const offered = mode === "rate"
-		? state.clients * RATE_PER_CLIENT
-		: (state.clients * CONCURRENCY_PER_CLIENT * 1000) /
-			Math.max(state.latencyMs, state.serviceMs);
-
-	return Math.min(MAX_OFFERED_RATE, Math.max(RATE_PER_CLIENT, offered));
-}
-
-function serviceCapacity(state: SimulationState, performance = state.workerPerformance): number {
-	const capacity = performance.reduce(
-		(total, factor) => total + 1000 / (state.serviceMs * factor),
-		0,
-	);
-
-	return Math.max(1, Math.floor(capacity));
-}
-
-function randomPerformance(): number {
-	return 0.75 + Math.random() * 0.5;
-}
-
-function fluctuatePerformance(performance: number): number {
-	return Math.max(0.7, Math.min(1.35, performance * (0.9 + Math.random() * 0.2)));
-}
-
-function randomWorker(workerCount: number): number {
-	return Math.floor(Math.random() * workerCount);
-}
-
-function advanceSimulation(current: SimulationState, mode: Mode): SimulationState {
-	const workerPerformance = current.workerPerformance.map(fluctuatePerformance);
-	let arrivalCredit = current.arrivalCredit + offeredRequests(current, mode) * (TICK_MS / 1000);
-	let nextJobId = current.nextJobId;
-	const newJobs: Job[] = [];
-
-	while (arrivalCredit >= 1) {
-		newJobs.push({
-			id: nextJobId,
-			client: (nextJobId - 1) % current.clients,
-			stage: "network",
-			remainingMs: current.networkMs,
-		});
-		nextJobId += 1;
-		arrivalCredit -= 1;
-	}
-
-	const progressedJobs = current.jobs
-		.map((job): Job | null => {
-			const remainingMs = job.remainingMs - TICK_MS;
-
-			if (job.stage === "service" && remainingMs <= 0) {
-				return null;
-			}
-
-			if (job.stage === "network" && remainingMs <= 0) {
-				return { ...job, stage: "routing", service: randomWorker(current.workers), remainingMs: ROUTING_MS };
-			}
-
-			if (job.stage === "routing" && remainingMs <= 0) {
-				return { ...job, stage: "queue", remainingMs: 0 };
-			}
-
-			if (job.stage === "serviceDispatch" && remainingMs <= 0) {
-				return { ...job, stage: "service", remainingMs: Math.max(100, Math.round(current.serviceMs * workerPerformance[job.service ?? 0])) };
-			}
-
-			return { ...job, remainingMs };
-		})
-		.filter((job): job is Job => job !== null);
-
-	let jobs = [...progressedJobs, ...newJobs];
-	const waitingJobs = jobs.filter((job) => job.stage === "queue");
-	const rejectedJobs = waitingJobs.filter((job) => {
-		if (job.service === undefined) {
-			return false;
-		}
-
-		return waitingJobs.filter((candidate) => candidate.service === job.service).findIndex((candidate) => candidate.id === job.id) >= QUEUE_LIMIT_PER_WORKER;
-	});
-	const rejectedIds = new Set(rejectedJobs.map((job) => job.id));
-	jobs = jobs.filter((job) => !rejectedIds.has(job.id));
-
-	const occupiedWorkers = new Set(
-		jobs
-			.filter((job) => (job.stage === "service" || job.stage === "serviceDispatch") && job.service !== undefined)
-			.map((job) => job.service),
-	);
-
-	for (let worker = 0; worker < current.workers; worker += 1) {
-		if (occupiedWorkers.has(worker)) {
-			continue;
-		}
-
-		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue" && job.service === worker);
-		if (nextJobIndex === -1) {
-			continue;
-		}
-
-		jobs[nextJobIndex] = {
-			...jobs[nextJobIndex],
-			stage: "serviceDispatch",
-			service: worker,
-			remainingMs: WORKER_TRAVEL_MS,
-		};
-		occupiedWorkers.add(worker);
-	}
-
-	const queue = jobs.filter((job) => job.stage === "queue").length;
-	const maxQueue = Math.max(
-		0,
-		...Array.from({ length: current.workers }, (_, worker) => jobs.filter((job) => job.stage === "queue" && job.service === worker).length),
-	);
-	return {
-		...current,
-		workerPerformance,
-		jobs,
-		nextJobId,
-		arrivalCredit,
-		queue,
-		latencyMs: current.networkMs + current.serviceMs + maxQueue * current.serviceMs,
-		dropped: current.dropped + rejectedJobs.length,
-		seconds: current.seconds + TICK_MS / 1000,
-	};
-}
-
-function getMetrics(state: SimulationState, mode: Mode) {
-	const offered = offeredRequests(state, mode);
-	const capacity = serviceCapacity(state);
-
-	return { offered, capacity };
-}
+import {
+	advanceSimulation,
+	createInitialState,
+	FIXED_CONCURRENCY_PER_CLIENT,
+	QUEUE_LIMIT_PER_WORKER,
+	MAX_CLIENTS,
+	MAX_WORKERS,
+	RATE_PER_CLIENT,
+	setClientCount,
+	setStrategy as setSimulationStrategy,
+	setWorkerCount,
+	serviceCapacity,
+	TICK_MS,
+	WORKER_TRAVEL_MS,
+	ROUTING_MS,
+} from "./congestion/simulation";
+import type { ControllerKind, JobStage, SimulationState } from "./congestion/simulation";
 
 function stackPosition(count: number, index: number, top: number, bottom: number): number {
 	if (count === 1) {
@@ -288,9 +122,9 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 	const lb = { x: width * 0.42, y: height / 2 };
 	const nodeTop = 52;
 	const nodeBottom = height - 52;
-	const clientPoints = Array.from({ length: state.clients }, (_, index) => ({
+	const clientPoints = Array.from({ length: state.clients.length }, (_, index) => ({
 		x: clientX,
-		y: stackPosition(state.clients, index, nodeTop, nodeBottom),
+		y: stackPosition(state.clients.length, index, nodeTop, nodeBottom),
 	}));
 	const servicePoints = Array.from({ length: state.workers }, (_, index) => ({
 		x: serviceX,
@@ -330,7 +164,10 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 	});
 
 	clientPoints.forEach((client, index) => {
-		drawNode(ctx, client, "Client " + (index + 1), RATE_PER_CLIENT + "/s source", false, ink, bg, accent);
+		const detail = state.strategy === "rate"
+			? RATE_PER_CLIENT + "/s source"
+			: Math.floor(state.clients[index].controller.limit) + " in flight";
+		drawNode(ctx, client, "Client " + (index + 1), detail, false, ink, bg, accent);
 	});
 
 	servicePoints.forEach((service, index) => {
@@ -420,11 +257,21 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 	});
 }
 
+const CONTROLLER_OPTIONS: Array<{ kind: ControllerKind; label: string }> = [
+	{ kind: "rate", label: "Rate" },
+	{ kind: "concurrency", label: "Concurrency" },
+	{ kind: "aimd", label: "AIMD" },
+	{ kind: "vegas", label: "Vegas" },
+	{ kind: "gradient2", label: "Gradient2" },
+];
+
 export default function CongestionSimulator() {
-	const [mode, setMode] = useState<Mode>("rate");
 	const [isRunning, setIsRunning] = useState(true);
-	const [state, setState] = useState<SimulationState>(INITIAL_STATE);
-	const metrics = useMemo(() => getMetrics(state, mode), [mode, state]);
+	const [state, setState] = useState<SimulationState>(() => createInitialState());
+	const metrics = useMemo(() => ({
+		averageLimit: state.clients.reduce((total, client) => total + client.controller.limit, 0) / state.clients.length,
+		capacity: serviceCapacity(state),
+	}), [state]);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const sceneStateRef = useRef(state);
 	const sceneUpdatedAtRef = useRef(0);
@@ -480,48 +327,26 @@ export default function CongestionSimulator() {
 		}
 
 		const timer = window.setInterval(() => {
-			setState((current) => advanceSimulation(current, mode));
+			setState((current) => advanceSimulation(current));
 		}, TICK_MS);
 
 		return () => window.clearInterval(timer);
-	}, [isRunning, mode]);
+	}, [isRunning]);
 
-	function changeMode(nextMode: Mode) {
-		setMode(nextMode);
-		setState(INITIAL_STATE);
+	function changeStrategy(strategy: ControllerKind) {
+		setState((current) => setSimulationStrategy(current, strategy));
 	}
 
 	function changeClients(delta: number) {
-		setState((current) => {
-			const clients = Math.max(1, Math.min(8, current.clients + delta));
-			const jobs = current.jobs.map((job) => ({
-				...job,
-				client: Math.min(job.client, clients - 1),
-			}));
-
-			return { ...current, clients, jobs };
-		});
+		setState((current) => setClientCount(current, current.clients.length + delta));
 	}
 
 	function changeWorkers(delta: number) {
-		setState((current) => {
-			const workers = Math.max(1, Math.min(8, current.workers + delta));
-			const workerPerformance = delta > 0
-				? [...current.workerPerformance, randomPerformance()]
-				: current.workerPerformance.slice(0, workers);
-
-			const jobs = current.jobs.map((job) => (
-				job.service !== undefined && job.service >= workers
-					? { ...job, stage: "network" as const, service: randomWorker(workers), remainingMs: current.networkMs }
-					: job
-			));
-
-			return { ...current, workers, workerPerformance, jobs, queue: jobs.filter((job) => job.stage === "queue").length };
-		});
+		setState((current) => setWorkerCount(current, current.workers + delta));
 	}
 
 	function reset() {
-		setState(INITIAL_STATE);
+		setState((current) => setSimulationStrategy(current, current.strategy));
 	}
 
 	return (
@@ -532,7 +357,7 @@ export default function CongestionSimulator() {
 					<h2 id="congestion-simulator-title">A fixed limit meets a changing system</h2>
 			</div>
 			<div className={styles.HeaderControls}>
-					<span className={styles.Clock}>t = {state.seconds.toFixed(1)}s</span>
+					<span className={styles.Clock}>t = {(state.nowMs / 1000).toFixed(1)}s</span>
 					<button
 						type="button"
 						className={styles.Play}
@@ -541,42 +366,39 @@ export default function CongestionSimulator() {
 					>
 						{isRunning ? "Pause" : "Play"}
 					</button>
-					<span className={state.queue > 0 ? styles.Warning : styles.Healthy}>
-						{state.queue > 0 ? "Queueing" : "Healthy"}
+					<span className={state.queueDepth > 0 ? styles.Warning : styles.Healthy}>
+						{state.queueDepth > 0 ? "Queueing" : "Healthy"}
 					</span>
 				</div>
 			</div>
 
-			<div className={styles.ModeSwitcher} role="group" aria-label="Choose a limiter">
-				<button
-					type="button"
-					className={mode === "rate" ? styles.Selected : ""}
-					aria-pressed={mode === "rate"}
-					onClick={() => changeMode("rate")}
-				>
-					Rate limit
-				</button>
-				<button
-					type="button"
-					className={mode === "concurrency" ? styles.Selected : ""}
-					aria-pressed={mode === "concurrency"}
-					onClick={() => changeMode("concurrency")}
-				>
-					Concurrency limit
-				</button>
+			<div className={styles.ModeSwitcher} role="group" aria-label="Choose a controller">
+				{CONTROLLER_OPTIONS.map((option) => (
+					<button
+						type="button"
+						className={state.strategy === option.kind ? styles.Selected : ""}
+						aria-pressed={state.strategy === option.kind}
+						onClick={() => changeStrategy(option.kind)}
+						key={option.kind}
+					>
+						{option.label}
+					</button>
+				))}
 			</div>
 
 			<p className={styles.Description}>
-				{mode === "rate"
-					? `${RATE_PER_CLIENT} requests per second per client, regardless of latency.`
-					: `${CONCURRENCY_PER_CLIENT} requests in flight per client, using latency as feedback.`}
+				{state.strategy === "rate" && `${RATE_PER_CLIENT} requests per second per client, regardless of latency.`}
+				{state.strategy === "concurrency" && `${FIXED_CONCURRENCY_PER_CLIENT} requests in flight per client, using a fixed window.`}
+				{state.strategy === "aimd" && "Additively increase the window after success; halve it when work is rejected."}
+				{state.strategy === "vegas" && "Use the extra round-trip delay to keep a small queue at the service."}
+				{state.strategy === "gradient2" && "Compare short- and long-term latency to follow the service’s changing capacity."}
 			</p>
 
 			<div className={styles.SceneFrame}>
 				<div className={styles.SceneControls}>
 					<div>
 						<span className={styles.ColumnLabel}>Clients</span>
-						<span className={styles.ColumnDetail}>{state.clients} active {state.clients === 1 ? "client" : "clients"}</span>
+						<span className={styles.ColumnDetail}>{state.clients.length} active {state.clients.length === 1 ? "client" : "clients"}</span>
 					</div>
 					<div className={styles.SceneControlGroup}>
 						<span className={styles.ColumnLabel}>Service</span>
@@ -586,15 +408,15 @@ export default function CongestionSimulator() {
 						<div className={styles.ControlSet}>
 							<span className={styles.ControlLabel}>clients</span>
 							<div className={styles.Stepper}>
-								<button type="button" aria-label="Remove client" disabled={state.clients === 1} onClick={() => changeClients(-1)}>−</button>
-								<button type="button" aria-label="Add client" disabled={state.clients === 8} onClick={() => changeClients(1)}>+</button>
+								<button type="button" aria-label="Remove client" disabled={state.clients.length === 1} onClick={() => changeClients(-1)}>−</button>
+								<button type="button" aria-label="Add client" disabled={state.clients.length === MAX_CLIENTS} onClick={() => changeClients(1)}>+</button>
 							</div>
 						</div>
 						<div className={styles.ControlSet}>
 							<span className={styles.ControlLabel}>workers</span>
 							<div className={styles.Stepper}>
 								<button type="button" aria-label="Remove worker" disabled={state.workers === 1} onClick={() => changeWorkers(-1)}>−</button>
-								<button type="button" aria-label="Add worker" disabled={state.workers === 8} onClick={() => changeWorkers(1)}>+</button>
+								<button type="button" aria-label="Add worker" disabled={state.workers === MAX_WORKERS} onClick={() => changeWorkers(1)}>+</button>
 							</div>
 						</div>
 					</div>
@@ -611,7 +433,8 @@ export default function CongestionSimulator() {
 			</div>
 
 			<div className={styles.Metrics} aria-live="polite">
-				<div><span>Offered rate</span><strong>{metrics.offered}/s</strong></div>
+				<div><span>Sent rate</span><strong>{state.sentRate.toFixed(1)}/s</strong></div>
+				<div><span>Client limit</span><strong>{state.strategy === "rate" ? `${RATE_PER_CLIENT}/s` : metrics.averageLimit.toFixed(1)}</strong></div>
 				<div><span>Observed latency</span><strong>{state.latencyMs}ms</strong></div>
 				<div><span>Rejected</span><strong>{state.dropped}</strong></div>
 			</div>

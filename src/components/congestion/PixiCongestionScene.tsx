@@ -1,7 +1,7 @@
 "use client";
 
 import { Application, Container, Graphics, Text } from "pixi.js";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import styles from "@/styles/CongestionSimulator.module.css";
 import { ROUTING_MS, SHARED_QUEUE_LIMIT, TICK_MS, WORKER_TRAVEL_MS } from "./simulation";
 import type { Job, SimulationState } from "./simulation";
@@ -27,6 +27,7 @@ interface JobView {
 }
 
 interface SceneLayout {
+	mobile: boolean;
 	width: number;
 	height: number;
 	clientX: number;
@@ -38,6 +39,7 @@ interface SceneLayout {
 }
 
 const ACCENT = "#b44b31";
+const CLIENT_COLOURS = ["#b44b31", "#2563eb", "#16806a", "#9333b8", "#a16207", "#be185d", "#087e9c", "#6663c6"];
 const JOB_INK = "#ffffff";
 const NODE_WIDTH = 104;
 const NODE_HEIGHT = 54;
@@ -134,20 +136,22 @@ class PixiScene {
 		}
 
 		this.layoutKey = key;
+		const mobile = window.matchMedia("(max-width: 760px)").matches;
 		this.layout = {
+			mobile,
 			width,
 			height,
 			clientX: 72,
 			serviceX: width - 72,
-			queueX: width * 0.66,
-			lb: { x: width * 0.42, y: height / 2 },
+			queueX: width * (mobile ? 0.7 : 0.66),
+			lb: { x: width * (mobile ? 0.3 : 0.42), y: height / 2 },
 			clients: Array.from({ length: this.state.clients.length }, (_, index) => ({
-				x: 72,
-				y: stackPosition(this.state.clients.length, index, 52, height - 52),
+				x: mobile ? width * (index % 2 === 0 ? 0.27 : 0.73) : 72,
+				y: mobile ? 52 + Math.floor(index / 2) * 70 : stackPosition(this.state.clients.length, index, 52, height - 52),
 			})),
 			workers: Array.from({ length: this.state.workers }, (_, index) => ({
-				x: width - 72,
-				y: stackPosition(this.state.workers, index, 52, height - 52),
+				x: mobile ? width * (index % 2 === 0 ? 0.27 : 0.73) : width - 72,
+				y: mobile ? height - 44 - (Math.ceil(this.state.workers / 2) - 1 - Math.floor(index / 2)) * 70 : stackPosition(this.state.workers, index, 52, height - 52),
 			})),
 		};
 
@@ -168,26 +172,26 @@ class PixiScene {
 		const bg = computed.backgroundColor || "transparent";
 		const muted = ink;
 
-		this.addPath({ x: layout.clientX + 52, y: layout.clients[0]?.y ?? layout.lb.y }, layout.lb, layout.width * 0.28, ink);
+		layout.clients.forEach((client) => this.addPath(this.clientDeparture(client), this.lbArrival(), layout.width * 0.28, ink));
 		this.addPath({ x: layout.lb.x + 30, y: layout.lb.y }, { x: layout.queueX - 52, y: layout.lb.y }, (layout.lb.x + layout.queueX) / 2, ink);
-		layout.workers.forEach((worker) => this.addPath({ x: layout.queueX + 52, y: layout.lb.y }, { x: worker.x - 52, y: worker.y }, (layout.queueX + worker.x) / 2, ink));
+		layout.workers.forEach((worker) => this.addPath({ x: layout.queueX + (layout.mobile ? 0 : 52), y: layout.lb.y + (layout.mobile ? 52 : 0) }, this.workerArrival(worker), (layout.queueX + worker.x) / 2, ink));
 
 		const clientsLabel = makeText("CLIENTS", 11, ink, "700");
 		clientsLabel.position.set(20, 12);
 		this.staticLayer.addChild(clientsLabel);
 		const lbLabel = makeText("LOAD BALANCER", 11, ink, "700");
-		lbLabel.position.set(layout.lb.x - 40, 12);
+		lbLabel.position.set(layout.lb.x - 48, layout.mobile ? layout.lb.y - 75 : 12);
 		this.staticLayer.addChild(lbLabel);
 		const workersLabel = makeText("SERVICE WORKERS", 11, ink, "700");
-		workersLabel.position.set(layout.width - 124, 12);
+		workersLabel.position.set(layout.mobile ? 20 : layout.width - 124, layout.mobile ? heightForWorkers(layout, this.state.workers) : 12);
 		this.staticLayer.addChild(workersLabel);
 
-		layout.clients.forEach((point) => this.clientViews.push(this.addNode(point, "Client", bg, ink, muted)));
-		layout.workers.forEach((point) => this.workerViews.push(this.addNode(point, "Worker", bg, ink, muted)));
+		layout.clients.forEach((point, index) => this.clientViews.push(this.addNode(point, `Client ${index + 1}`, bg, ink, muted)));
+		layout.workers.forEach((point, index) => this.workerViews.push(this.addNode(point, `Worker ${index + 1}`, bg, ink, muted)));
 
 		const queue = new Graphics().roundRect(layout.queueX - 52, layout.lb.y - 52, 104, 104, 8).fill(bg).stroke({ color: ink, width: 2 });
 		this.staticLayer.addChild(queue);
-		this.queueLabel = makeText("QUEUE", 9, ink, "700");
+		this.queueLabel = makeText("QUEUE", 11, ink, "700");
 		this.queueLabel.position.set(layout.queueX - 43, layout.lb.y - 42);
 		this.staticLayer.addChild(this.queueLabel);
 		for (let index = 0; index < SHARED_QUEUE_LIMIT; index += 1) {
@@ -216,9 +220,9 @@ class PixiScene {
 		const body = new Graphics();
 		const title = makeText(label, 13, ink, "700");
 		title.position.set(-41, -22);
-		const detail = makeText("ready", 11, muted, "400");
+		const detail = makeText("ready", 12, muted, "400");
 		detail.position.set(-41, -4);
-		detail.alpha = 0.58;
+		detail.alpha = 0.85;
 		container.addChild(body, title, detail);
 		this.staticLayer.addChild(container);
 		return { container, body, detail };
@@ -233,16 +237,29 @@ class PixiScene {
 		const bg = computed.backgroundColor || "transparent";
 		this.clientViews.forEach((view, index) => {
 			view.detail.text = this.state.strategy === "rate" ? "0.5/s source" : `${formatLimit(this.state.clients[index].controller.limit)} in flight`;
-			view.body.clear().roundRect(-NODE_WIDTH / 2, -NODE_HEIGHT / 2, NODE_WIDTH, NODE_HEIGHT, 8).fill(bg).stroke({ color: ink, width: 2 });
+			view.body.clear().roundRect(-NODE_WIDTH / 2, -NODE_HEIGHT / 2, NODE_WIDTH, NODE_HEIGHT, 8).fill(bg).stroke({ color: CLIENT_COLOURS[index % CLIENT_COLOURS.length], width: 2 });
 		});
 		this.workerViews.forEach((view, index) => {
 			const busy = this.state.jobs.some((job) => (job.stage === "service" || job.stage === "serviceDispatch") && job.service === index);
-			view.detail.text = busy ? "processing work" : "ready";
+			view.detail.text = busy ? "busy" : "ready";
 			view.body.clear().roundRect(-NODE_WIDTH / 2, -NODE_HEIGHT / 2, NODE_WIDTH, NODE_HEIGHT, 8).fill(busy ? "rgba(180, 75, 49, 0.12)" : bg).stroke({ color: ink, width: 2 });
 		});
 		this.queueLabel!.text = `QUEUE ${this.state.jobs.filter((job) => job.stage === "queue").length}/${SHARED_QUEUE_LIMIT}`;
 		const queueDepth = this.state.jobs.filter((job) => job.stage === "queue").length;
 		this.queueSlots.forEach((slot, index) => slot.clear().rect(this.queuePoint(index).x - 6, this.queuePoint(index).y - 6, 12, 12).fill(index < queueDepth ? ACCENT : { color: ink, alpha: 0.08 }));
+	}
+
+	private clientDeparture(point: Point): Point {
+		return this.layout!.mobile ? { x: point.x, y: point.y + 27 } : { x: point.x + 52, y: point.y };
+	}
+
+	private lbArrival(): Point {
+		const { lb, mobile } = this.layout!;
+		return mobile ? { x: lb.x, y: lb.y - 25 } : { x: lb.x - 30, y: lb.y };
+	}
+
+	private workerArrival(point: Point): Point {
+		return this.layout!.mobile ? { x: point.x, y: point.y - 27 } : { x: point.x - 52, y: point.y };
 	}
 
 	private queuePoint(index: number): Point {
@@ -254,11 +271,11 @@ class PixiScene {
 		const layout = this.layout!;
 		const queuedJobs = this.state.jobs.filter((candidate) => candidate.stage === "queue");
 		if (job.stage === "queue") return this.queuePoint(Math.max(0, queuedJobs.findIndex((candidate) => candidate.id === job.id)));
-		if (job.stage === "network") return this.pathPosition({ x: layout.clientX + 52, y: layout.clients[job.client]?.y ?? layout.lb.y }, { x: layout.lb.x - 30, y: layout.lb.y }, job.remainingMs, this.state.networkMs);
+		if (job.stage === "network") return this.pathPosition(this.clientDeparture(layout.clients[job.client] ?? layout.lb), this.lbArrival(), job.remainingMs, this.state.networkMs);
 		if (job.stage === "routing") return this.pathPosition({ x: layout.lb.x + 30, y: layout.lb.y }, { x: layout.queueX - 52, y: layout.lb.y }, job.remainingMs, ROUTING_MS);
 		if (job.service === undefined || !layout.workers[job.service]) return this.queuePoint(0);
 		const worker = layout.workers[job.service];
-		if (job.stage === "serviceDispatch") return this.pathPosition(this.queuePoint(job.queueSlot ?? 0), { x: worker.x - 52, y: worker.y }, job.remainingMs, WORKER_TRAVEL_MS);
+		if (job.stage === "serviceDispatch") return this.pathPosition(this.queuePoint(job.queueSlot ?? 0), this.workerArrival(worker), job.remainingMs, WORKER_TRAVEL_MS);
 		return { x: worker.x + 34, y: worker.y + 10 };
 	}
 
@@ -269,13 +286,13 @@ class PixiScene {
 
 	private createJobView(job: Job, target: Point): JobView {
 		const container = new Container();
-		const circle = new Graphics().circle(0, 0, 8).fill(ACCENT).stroke({ color: JOB_INK, width: 2 });
+		const circle = new Graphics().circle(0, 0, 8).fill(CLIENT_COLOURS[job.client % CLIENT_COLOURS.length]).stroke({ color: JOB_INK, width: 2 });
 		const label = makeText(String(job.id % 100), 8, JOB_INK, "700");
 		label.anchor.set(0.5);
 		container.addChild(circle, label);
 		this.jobLayer.addChild(container);
 		const start = job.stage === "network"
-			? { x: this.layout!.clientX + NODE_WIDTH / 2, y: this.layout!.clients[job.client]?.y ?? this.layout!.lb.y }
+			? this.clientDeparture(this.layout!.clients[job.client] ?? this.layout!.lb)
 			: target;
 		container.position.set(start.x, start.y);
 		return { container, from: start, to: target, progress: 0, durationMs: TICK_MS, removing: false };
@@ -309,11 +326,17 @@ class PixiScene {
 	}
 }
 
+function heightForWorkers(layout: SceneLayout, count: number): number {
+	return layout.height - 44 - (Math.ceil(count / 2) - 1) * 70 - 48;
+}
+
 export default function PixiCongestionScene({ state }: { state: SimulationState }) {
 	const hostRef = useRef<HTMLDivElement>(null);
 	const stateRef = useRef(state);
 	const sceneRef = useRef<PixiScene | undefined>(undefined);
-	stateRef.current = state;
+	useEffect(() => {
+		stateRef.current = state;
+	}, [state]);
 
 	useEffect(() => {
 		const host = hostRef.current;
@@ -366,5 +389,5 @@ export default function PixiCongestionScene({ state }: { state: SimulationState 
 		sceneRef.current?.updateState(state);
 	}, [state]);
 
-	return <div ref={hostRef} className={styles.SceneCanvas} role="img" aria-label="Animated diagram of individual clients sending jobs through a load balancer and shared FIFO queue to individual service workers" />;
+	return <div ref={hostRef} className={styles.SceneCanvas} style={{ "--desktop-scene-height": `${Math.max(420, 104 + (Math.max(state.clients.length, state.workers) - 1) * 62)}px`, "--mobile-scene-height": `${248 + 140 * Math.ceil(Math.max(state.clients.length, state.workers) / 2)}px` } as CSSProperties} role="img" aria-label="Animated diagram of individual clients sending jobs through a load balancer and shared FIFO queue to individual service workers" />;
 }

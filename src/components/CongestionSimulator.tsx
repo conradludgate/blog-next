@@ -119,20 +119,15 @@ export default function CongestionSimulator() {
 			<div className={styles.Challenge}>
 				<div>
 					<span className={styles.ChallengeLabel}>Try it</span>
-					<p>Add clients until work starts waiting. Then add a worker and watch the queue drain.</p>
-				</div>
-				<div className={styles.ChallengeActions}>
-					<button type="button" disabled={state.clients.length === MAX_CLIENTS} onClick={() => changeClients(1)}>
-						Add a client <span aria-hidden="true">→</span>
-					</button>
-					<button type="button" disabled={state.workers === MAX_WORKERS} onClick={() => changeWorkers(1)}>
-						Add a worker <span aria-hidden="true">→</span>
-					</button>
+					<p>Use the + controls to add clients until work starts waiting. Then add a worker and watch the queue drain.</p>
 				</div>
 			</div>
 
 			<div className={styles.ControllerRow}>
 				<span className={styles.ControllerLabel}>Clients send using</span>
+				<select className={styles.MobileController} aria-label="Choose how clients send work" value={state.strategy} onChange={(event) => changeStrategy(event.target.value as ControllerKind)}>
+					{CONTROLLER_OPTIONS.map((option) => <option value={option.kind} key={option.kind}>{option.label}</option>)}
+				</select>
 				<div className={styles.ModeSwitcher} role="group" aria-label="Choose how clients send work">
 					{CONTROLLER_OPTIONS.map((option) => (
 						<button

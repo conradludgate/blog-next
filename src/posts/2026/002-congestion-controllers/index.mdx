@@ -1,3 +1,9 @@
+import BlogPost from "@/layouts/BlogPost";
+
+export default function Layout({ children }) {
+  return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
 import CongestionSimulator from "@/components/CongestionSimulator";
 
 export const meta = {

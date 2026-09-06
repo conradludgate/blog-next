@@ -5,6 +5,8 @@
 	--sim-accent: #b44b31;
 	--sim-accent-soft: color-mix(in srgb, var(--sim-accent) 10%, var(--color-bg));
 	margin: 2.75rem 0;
+	width: min(1100px, calc(100vw - 2rem));
+	margin-inline: calc((100% - min(1100px, calc(100vw - 2rem))) / 2);
 	color: var(--color-fg);
 }
 
@@ -57,7 +59,7 @@
 .Warning { color: var(--sim-accent); }
 .Warning::before { background: var(--sim-accent); }
 
-.Play, .ModeSwitcher button, .Stepper button, .Reset, .ChallengeActions button {
+.Play, .ModeSwitcher button, .Stepper button, .Reset {
 	min-height: 2.25rem;
 	padding: 0.4rem 0.7rem;
 	border: 1px solid var(--sim-border);
@@ -70,17 +72,17 @@
 	touch-action: manipulation;
 }
 
-.Play:hover, .ModeSwitcher button:hover, .Stepper button:hover, .Reset:hover, .ChallengeActions button:hover {
+.Play:hover, .ModeSwitcher button:hover, .Stepper button:hover, .Reset:hover {
 	border-color: var(--sim-accent);
 	color: var(--sim-accent);
 }
 
-.Play:focus-visible, .ModeSwitcher button:focus-visible, .Stepper button:focus-visible, .Reset:focus-visible, .ChallengeActions button:focus-visible {
+.Play:focus-visible, .ModeSwitcher button:focus-visible, .Stepper button:focus-visible, .Reset:focus-visible {
 	outline: 3px solid color-mix(in srgb, var(--sim-accent) 34%, transparent);
 	outline-offset: 2px;
 }
 
-.Stepper button:disabled, .ChallengeActions button:disabled { opacity: 0.35; cursor: not-allowed; }
+.Stepper button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .Challenge {
 	align-items: flex-start;
@@ -92,9 +94,6 @@
 
 .ChallengeLabel { color: var(--sim-accent); font-size: 0.75rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
 .Challenge p { max-width: 34rem; margin: 0.2rem 0 0; font-size: 0.9375rem; line-height: 1.45; }
-.ChallengeActions { display: flex; gap: 0.5rem; flex: 0 0 auto; }
-.ChallengeActions button:first-child { border-color: var(--sim-accent); background: var(--sim-accent); color: #fff; }
-.ChallengeActions button:first-child:hover { background: color-mix(in srgb, var(--sim-accent) 88%, #000); color: #fff; }
 
 .ControllerRow { align-items: baseline; margin-top: 1.15rem; }
 .ControllerLabel, .ControlLabel, .CapacitySummary span { color: var(--sim-muted); font-size: 0.8125rem; }
@@ -173,7 +172,6 @@
 @media only screen and (max-width: 760px) {
 	.Header, .Challenge { align-items: stretch; flex-direction: column; }
 	.HeaderControls { justify-content: space-between; }
-	.ChallengeActions button { flex: 1; }
 	.ControllerRow { align-items: stretch; flex-direction: column; gap: 0.45rem; }
 	.ModeSwitcher { overflow-x: auto; justify-content: flex-start; padding-bottom: 0.3rem; }
 	.ModeSwitcher button { flex: 0 0 auto; }
@@ -186,7 +184,6 @@
 }
 
 @media only screen and (max-width: 460px) {
-	.ChallengeActions { flex-direction: column; }
 	.ControlSets { width: 100%; justify-content: space-between; }
 	.ControlSet { border-left: 0; padding-left: 0; }
 	.SceneCanvas { height: 34rem; }
@@ -194,3 +191,30 @@
 }
 
 @media (prefers-reduced-motion: reduce) { .QueueTrack i { transition: none; } }
+
+/* Keep the experiment wider than the reading column, with viewport gutters. */
+.ControllerRow { justify-content: flex-start; gap: 0.75rem; }
+.HeaderControls { gap: 0.65rem; }
+.Challenge { margin-top: 0.75rem; padding: 0.6rem 0.85rem; }
+.Challenge p { max-width: none; }
+.ControllerRow { margin-top: 0.75rem; }
+.SceneCanvas { height: var(--desktop-scene-height, 420px); }
+.Stepper button { width: 44px; min-height: 44px; }
+.Stepper { gap: 0.4rem; }
+.Play, .Reset { min-height: 44px; }
+.Metrics { margin-top: 0.65rem; }
+.MobileController { display: none; }
+@media (max-width: 760px) {
+  .Header { gap: 0.5rem; }
+  .HeaderControls { justify-content: flex-start; }
+  .ControllerRow { flex-direction: row; align-items: center; flex-wrap: wrap; }
+  .ModeSwitcher { display: none; }
+  .MobileController { display: block; min-height: 44px; flex: 1; padding: 0.5rem; border: 1px solid var(--sim-border); border-radius: 0.35rem; background: var(--color-bg); color: var(--color-fg); font: inherit; }
+  .MobileController:focus-visible { outline: 3px solid var(--sim-accent); outline-offset: 2px; }
+  .SceneCanvas { height: var(--mobile-scene-height, 528px); }
+  .ControlSets { width: 100%; flex-wrap: wrap; gap: 0.5rem; justify-content: space-between; }
+  .ControlSet { border: 0; padding: 0; gap: 0.35rem; }
+  .SceneControls { gap: 0.4rem; }
+  .Description { line-height: 1.5; }
+  .Metrics > div { padding: 0.65rem; }
+}

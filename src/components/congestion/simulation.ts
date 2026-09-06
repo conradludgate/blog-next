@@ -370,7 +370,7 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 
 	return {
 		...current,
-		clients: clientsWithJobs,
+		clients,
 		workerPerformance,
 		jobs,
 		nextJobId,

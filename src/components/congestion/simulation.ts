@@ -59,11 +59,27 @@ export const MAX_WORKERS = 8;
 export const TICK_MS = 250;
 export const ROUTING_MS = 500;
 export const WORKER_TRAVEL_MS = 350;
+export const BASELINE_LATENCY_MS = 2750;
 export const RATE_PER_CLIENT = 0.5;
 export const FIXED_CONCURRENCY_PER_CLIENT = 4;
 export const MAX_CONTROLLER_LIMIT = 16;
 export const METRIC_EWMA_ALPHA = 0.2;
 export const METRIC_SAMPLE_WINDOW_MS = 2000;
+
+// These values are deliberately tuned for the simulator's small, slow system:
+// four workers, roughly 4 jobs/s of capacity, and a ~2.75s unloaded RTT.
+export const VEGAS_SAMPLE_SIZE = 4;
+export const VEGAS_ALPHA = 2;
+export const VEGAS_BETA = 4;
+export const GRADIENT2_SAMPLE_SIZE = 4;
+export const GRADIENT2_SHORT_ALPHA = 0.35;
+export const GRADIENT2_LONG_ALPHA = 0.08;
+export const GRADIENT2_RISING_THRESHOLD = 1.05;
+export const GRADIENT2_TARGET_QUEUE = 2;
+export const GRADIENT2_MAX_QUEUE = 4;
+export const GRADIENT2_PROBE_STEP = 0.5;
+export const GRADIENT2_LIMIT_ALPHA = 0.35;
+export const GRADIENT2_BACKOFF_FACTOR = 0.7;
 
 function createController(kind: ControllerKind): ControllerState {
 	return {
@@ -83,7 +99,7 @@ function createClient(kind: ControllerKind): ClientState {
 		rateCredit: 0,
 		metrics: {
 			sentRate: 0,
-			latencyMs: 1900,
+			latencyMs: BASELINE_LATENCY_MS,
 			rejectionRate: 0,
 			sentInWindow: 0,
 			sentWindowMs: 0,
@@ -102,7 +118,7 @@ export function createInitialState(strategy: ControllerKind = "rate"): Simulatio
 		jobs: [],
 		nextJobId: 1,
 		queueDepth: 0,
-		latencyMs: 1900,
+		latencyMs: BASELINE_LATENCY_MS,
 		dropped: 0,
 		completed: 0,
 		sentRate: 0,
@@ -158,26 +174,41 @@ function updateController(controller: ControllerState, rttMs: number, dropped: b
 		return { ...next, limit: clamp(controller.limit + 1 / Math.max(1, controller.limit), 1, MAX_CONTROLLER_LIMIT) };
 	}
 
-	if (next.sampleCount < 4) {
-		return next;
-	}
-
 	if (controller.kind === "vegas") {
+		if (next.sampleCount < VEGAS_SAMPLE_SIZE) {
+			return next;
+		}
+
 		const averageRtt = next.rttSum / next.sampleCount;
 		const queueEstimate = next.limit * (1 - next.minRtt / averageRtt);
-		const limit = queueEstimate < 2 ? next.limit + 1 : queueEstimate > 4 ? next.limit - 1 : next.limit;
+		const limit = queueEstimate < VEGAS_ALPHA
+			? next.limit + 1
+			: queueEstimate > VEGAS_BETA
+				? next.limit - 1
+				: next.limit;
 
 		return { ...next, limit: clamp(limit, 1, MAX_CONTROLLER_LIMIT), sampleCount: 0, rttSum: 0 };
 	}
 
-	const shortRtt = next.shortRtt === 0 ? rttMs : next.shortRtt * 0.7 + rttMs * 0.3;
-	const longRtt = next.longRtt === 0 ? rttMs : next.longRtt * 0.95 + rttMs * 0.05;
-	const gradient = clamp(longRtt / Math.max(shortRtt, 1), 0.5, 1);
-	const targetLimit = gradient * next.limit + 1;
+	const shortRtt = next.shortRtt === 0 ? rttMs : ewma(next.shortRtt, rttMs, GRADIENT2_SHORT_ALPHA);
+	const longRtt = next.longRtt === 0 ? rttMs : ewma(next.longRtt, rttMs, GRADIENT2_LONG_ALPHA);
+	if (next.sampleCount < GRADIENT2_SAMPLE_SIZE) {
+		return { ...next, shortRtt, longRtt };
+	}
+
+	const divergence = shortRtt / Math.max(longRtt, 1);
+	const queueEstimate = next.limit * (1 - next.minRtt / Math.max(shortRtt, 1));
+	const backingOff = divergence >= GRADIENT2_RISING_THRESHOLD || queueEstimate > GRADIENT2_MAX_QUEUE;
+	const holding = queueEstimate >= GRADIENT2_TARGET_QUEUE;
+	const targetLimit = backingOff
+		? next.limit * GRADIENT2_BACKOFF_FACTOR
+		: holding
+			? next.limit
+			: next.limit + GRADIENT2_PROBE_STEP;
 
 	return {
 		...next,
-		limit: clamp(next.limit * 0.8 + targetLimit * 0.2, 1, MAX_CONTROLLER_LIMIT),
+		limit: clamp(ewma(next.limit, targetLimit, GRADIENT2_LIMIT_ALPHA), 1, MAX_CONTROLLER_LIMIT),
 		shortRtt,
 		longRtt,
 		sampleCount: 0,

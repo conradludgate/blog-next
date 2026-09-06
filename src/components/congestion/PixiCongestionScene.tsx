@@ -166,7 +166,7 @@ class PixiScene {
 		const computed = getComputedStyle(this.app.canvas);
 		const ink = computed.color || "#1d1d1d";
 		const bg = computed.backgroundColor || "transparent";
-		const muted = computed.getPropertyValue("--sim-muted").trim() || ink;
+		const muted = ink;
 
 		this.addPath({ x: layout.clientX + 52, y: layout.clients[0]?.y ?? layout.lb.y }, layout.lb, layout.width * 0.28, ink);
 		this.addPath({ x: layout.lb.x + 30, y: layout.lb.y }, { x: layout.queueX - 52, y: layout.lb.y }, (layout.lb.x + layout.queueX) / 2, ink);
@@ -218,6 +218,7 @@ class PixiScene {
 		title.position.set(-41, -22);
 		const detail = makeText("ready", 11, muted, "400");
 		detail.position.set(-41, -4);
+		detail.alpha = 0.58;
 		container.addChild(body, title, detail);
 		this.staticLayer.addChild(container);
 		return { container, body, detail };

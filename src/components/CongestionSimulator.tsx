@@ -20,7 +20,7 @@ interface SimulationState {
 	seconds: number;
 }
 
-type JobStage = "network" | "queue" | "dispatch" | "service";
+type JobStage = "network" | "routing" | "queue" | "serviceDispatch" | "service";
 
 interface Job {
 	id: number;
@@ -30,16 +30,17 @@ interface Job {
 	service?: number;
 }
 
-const QUEUE_LIMIT = 12;
+const QUEUE_LIMIT_PER_WORKER = 4;
 const TICK_MS = 250;
-const DISPATCH_MS = 500;
+const ROUTING_MS = 500;
+const WORKER_TRAVEL_MS = 350;
 const INITIAL_STATE: SimulationState = {
 	clients: 1,
 	workers: 4,
 	serviceMs: 1000,
 	networkMs: 900,
 	workerPerformance: [1, 1, 1, 1],
-	jobs: [],
+		jobs: [],
 	nextJobId: 1,
 	arrivalCredit: 0,
 	queue: 0,
@@ -78,6 +79,10 @@ function fluctuatePerformance(performance: number): number {
 	return Math.max(0.7, Math.min(1.35, performance * (0.9 + Math.random() * 0.2)));
 }
 
+function randomWorker(workerCount: number): number {
+	return Math.floor(Math.random() * workerCount);
+}
+
 function advanceSimulation(current: SimulationState, mode: Mode): SimulationState {
 	const workerPerformance = current.workerPerformance.map(fluctuatePerformance);
 	let arrivalCredit = current.arrivalCredit + offeredRequests(current, mode) * (TICK_MS / 1000);
@@ -104,10 +109,14 @@ function advanceSimulation(current: SimulationState, mode: Mode): SimulationStat
 			}
 
 			if (job.stage === "network" && remainingMs <= 0) {
+				return { ...job, stage: "routing", service: randomWorker(current.workers), remainingMs: ROUTING_MS };
+			}
+
+			if (job.stage === "routing" && remainingMs <= 0) {
 				return { ...job, stage: "queue", remainingMs: 0 };
 			}
 
-			if (job.stage === "dispatch" && remainingMs <= 0) {
+			if (job.stage === "serviceDispatch" && remainingMs <= 0) {
 				return { ...job, stage: "service", remainingMs: Math.max(100, Math.round(current.serviceMs * workerPerformance[job.service ?? 0])) };
 			}
 
@@ -117,13 +126,19 @@ function advanceSimulation(current: SimulationState, mode: Mode): SimulationStat
 
 	let jobs = [...progressedJobs, ...newJobs];
 	const waitingJobs = jobs.filter((job) => job.stage === "queue");
-	const rejectedJobs = waitingJobs.slice(QUEUE_LIMIT);
+	const rejectedJobs = waitingJobs.filter((job) => {
+		if (job.service === undefined) {
+			return false;
+		}
+
+		return waitingJobs.filter((candidate) => candidate.service === job.service).findIndex((candidate) => candidate.id === job.id) >= QUEUE_LIMIT_PER_WORKER;
+	});
 	const rejectedIds = new Set(rejectedJobs.map((job) => job.id));
 	jobs = jobs.filter((job) => !rejectedIds.has(job.id));
 
 	const occupiedWorkers = new Set(
 		jobs
-			.filter((job) => job.stage === "service" && job.service !== undefined)
+			.filter((job) => (job.stage === "service" || job.stage === "serviceDispatch") && job.service !== undefined)
 			.map((job) => job.service),
 	);
 
@@ -132,21 +147,25 @@ function advanceSimulation(current: SimulationState, mode: Mode): SimulationStat
 			continue;
 		}
 
-		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue");
+		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue" && job.service === worker);
 		if (nextJobIndex === -1) {
 			break;
 		}
 
 		jobs[nextJobIndex] = {
 			...jobs[nextJobIndex],
-			stage: "dispatch",
+			stage: "serviceDispatch",
 			service: worker,
-			remainingMs: DISPATCH_MS,
+			remainingMs: WORKER_TRAVEL_MS,
 		};
 		occupiedWorkers.add(worker);
 	}
 
 	const queue = jobs.filter((job) => job.stage === "queue").length;
+	const maxQueue = Math.max(
+		0,
+		...Array.from({ length: current.workers }, (_, worker) => jobs.filter((job) => job.stage === "queue" && job.service === worker).length),
+	);
 	return {
 		...current,
 		workerPerformance,
@@ -154,7 +173,7 @@ function advanceSimulation(current: SimulationState, mode: Mode): SimulationStat
 		nextJobId,
 		arrivalCredit,
 		queue,
-		latencyMs: current.networkMs + current.serviceMs + Math.round((queue / current.workers) * current.serviceMs),
+		latencyMs: current.networkMs + current.serviceMs + maxQueue * current.serviceMs,
 		dropped: current.dropped + rejectedJobs.length,
 		seconds: current.seconds + TICK_MS / 1000,
 	};
@@ -165,10 +184,6 @@ function getMetrics(state: SimulationState, mode: Mode) {
 	const capacity = serviceCapacity(state);
 
 	return { offered, capacity };
-}
-
-function performanceOpacity(performance: number): number {
-	return Math.max(0.45, Math.min(1, 1.35 - performance));
 }
 
 function stackPosition(count: number, index: number, top: number, bottom: number): number {
@@ -263,49 +278,97 @@ function drawJob(ctx: CanvasRenderingContext2D, point: Point, id: number, accent
 }
 
 function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number, state: SimulationState, elapsedMs: number) {
-	const ink = getComputedStyle(ctx.canvas).color || "#1d1d1d";
-	const bg = getComputedStyle(ctx.canvas).backgroundColor || "transparent";
+	const styles = getComputedStyle(ctx.canvas);
+	const ink = styles.color || "#1d1d1d";
+	const bg = styles.backgroundColor || "transparent";
 	const accent = "#b44b31";
 	const clientX = 72;
 	const serviceX = width - 72;
-	const lb = { x: width / 2, y: height / 2 - 94 };
-	const queue = { x: width / 2, y: height / 2 + 26 };
+	const queueX = serviceX - 126;
+	const lb = { x: width * 0.42, y: height / 2 };
 	const nodeTop = 52;
 	const nodeBottom = height - 52;
-	const clientPoints = Array.from({ length: state.clients }, (_, index) => ({ x: clientX, y: stackPosition(state.clients, index, nodeTop, nodeBottom) }));
-	const servicePoints = Array.from({ length: state.workers }, (_, index) => ({ x: serviceX, y: stackPosition(state.workers, index, nodeTop, nodeBottom) }));
-	const queueJobs = state.jobs.filter((job) => job.stage === "queue");
-	const queuePoint = (index: number): Point => ({
-		x: queue.x - 34 + (index % 4) * 23,
-		y: queue.y + 24 + Math.floor(index / 4) * 22,
+	const clientPoints = Array.from({ length: state.clients }, (_, index) => ({
+		x: clientX,
+		y: stackPosition(state.clients, index, nodeTop, nodeBottom),
+	}));
+	const servicePoints = Array.from({ length: state.workers }, (_, index) => ({
+		x: serviceX,
+		y: stackPosition(state.workers, index, nodeTop, nodeBottom),
+	}));
+	const queuePoint = (worker: number, index: number): Point => ({
+		x: queueX - 18 + (index % 2) * 20,
+		y: servicePoints[worker].y + 5 + Math.floor(index / 2) * 17,
 	});
+	const jobsForWorker = (worker: number, stage: JobStage) => state.jobs.filter((job) => job.stage === stage && job.service === worker);
 
 	ctx.clearRect(0, 0, width, height);
-
 	ctx.fillStyle = ink;
 	ctx.font = "700 11px system-ui, sans-serif";
 	ctx.fillText("CLIENTS", 20, 22);
-	ctx.fillText("LOAD BALANCER", lb.x - 45, lb.y - 37);
+	ctx.fillText("RANDOM ROUTING", lb.x - 44, 22);
 	ctx.fillText("SERVICE WORKERS", width - 124, 22);
 
-	clientPoints.forEach((client, index) => {
+	clientPoints.forEach((client) => {
 		const end = { x: lb.x - 30, y: lb.y };
-		const control = { x: width * 0.29, y: client.y + (end.y - client.y) * 0.35 };
+		const control = { x: width * 0.28, y: client.y + (end.y - client.y) * 0.35 };
 		drawPath(ctx, { x: client.x + 52, y: client.y }, control, end, "rgba(0, 0, 0, 0.24)");
-		const angle = Math.atan2(end.y - control.y, end.x - control.x);
-		drawArrow(ctx, quadraticPoint({ x: client.x + 52, y: client.y }, control, end, 0.97), angle, "rgba(0, 0, 0, 0.35)");
-		drawNode(ctx, client, `Client ${index + 1}`, `${RATE_PER_CLIENT}/s source`, false, ink, bg, accent);
+		drawArrow(ctx, quadraticPoint({ x: client.x + 52, y: client.y }, control, end, 0.97), Math.atan2(end.y - control.y, end.x - control.x), "rgba(0, 0, 0, 0.35)");
+	});
+
+	servicePoints.forEach((service) => {
+		const routingStart = { x: lb.x + 30, y: lb.y };
+		const routingEnd = { x: queueX - 36, y: service.y };
+		const routingControl = { x: width * 0.66, y: routingStart.y + (routingEnd.y - routingStart.y) * 0.35 };
+		drawPath(ctx, routingStart, routingControl, routingEnd, "rgba(0, 0, 0, 0.24)");
+		drawArrow(ctx, quadraticPoint(routingStart, routingControl, routingEnd, 0.97), Math.atan2(routingEnd.y - routingControl.y, routingEnd.x - routingControl.x), "rgba(0, 0, 0, 0.35)");
+
+		const start = { x: queueX + 36, y: service.y };
+		const end = { x: service.x - 52, y: service.y };
+		drawPath(ctx, start, { x: (start.x + end.x) / 2, y: service.y }, end, "rgba(0, 0, 0, 0.24)");
+		drawArrow(ctx, { x: end.x - 2, y: end.y }, 0, "rgba(0, 0, 0, 0.35)");
+	});
+
+	clientPoints.forEach((client, index) => {
+		drawNode(ctx, client, "Client " + (index + 1), RATE_PER_CLIENT + "/s source", false, ink, bg, accent);
 	});
 
 	servicePoints.forEach((service, index) => {
-		const start = { x: queue.x + 48, y: queue.y + 28 };
-		const control = { x: width * 0.71, y: service.y + (start.y - service.y) * 0.35 };
-		drawPath(ctx, start, control, { x: service.x - 52, y: service.y }, "rgba(0, 0, 0, 0.24)");
-		const angle = Math.atan2(service.y - control.y, service.x - 52 - control.x);
-		drawArrow(ctx, quadraticPoint(start, control, { x: service.x - 52, y: service.y }, 0.97), angle, "rgba(0, 0, 0, 0.35)");
-		const job = state.jobs.find((candidate) => candidate.stage === "service" && candidate.service === index);
-		const dispatching = state.jobs.some((candidate) => candidate.stage === "dispatch" && candidate.service === index);
-		drawNode(ctx, service, `Worker ${index + 1}`, job || dispatching ? "processing work" : "ready", Boolean(job || dispatching), ink, bg, accent);
+		const queuedJobs = jobsForWorker(index, "queue");
+		const busy = state.jobs.some((job) => (job.stage === "service" || job.stage === "serviceDispatch") && job.service === index);
+
+		ctx.save();
+		ctx.fillStyle = queuedJobs.length > 0 ? "rgba(180, 75, 49, 0.12)" : bg;
+		ctx.strokeStyle = ink;
+		ctx.lineWidth = 1.5;
+		ctx.setLineDash([4, 3]);
+		ctx.beginPath();
+		ctx.roundRect(queueX - 36, service.y - 29, 72, 58, 6);
+		ctx.fill();
+		ctx.stroke();
+		ctx.restore();
+		ctx.setLineDash([]);
+		ctx.fillStyle = ink;
+		ctx.font = "700 9px system-ui, sans-serif";
+		ctx.fillText("q" + (index + 1) + " " + queuedJobs.length + "/" + QUEUE_LIMIT_PER_WORKER, queueX - 29, service.y - 13);
+
+		for (let slot = 0; slot < QUEUE_LIMIT_PER_WORKER; slot += 1) {
+			const point = queuePoint(index, slot);
+			ctx.fillStyle = slot < queuedJobs.length ? accent : "rgba(0, 0, 0, 0.08)";
+			ctx.fillRect(point.x - 6, point.y - 6, 12, 12);
+		}
+
+		const serviceJob = state.jobs.find((job) => job.stage === "service" && job.service === index);
+		const dispatching = state.jobs.some((job) => job.stage === "serviceDispatch" && job.service === index);
+		drawNode(ctx, service, "Worker " + (index + 1), busy ? "processing work" : "ready", busy, ink, bg, accent);
+		if (serviceJob) {
+			drawJob(ctx, { x: service.x + 34, y: service.y + 10 }, serviceJob.id, accent, ink);
+		} else if (dispatching) {
+			const dispatchJob = state.jobs.find((job) => job.stage === "serviceDispatch" && job.service === index);
+			if (dispatchJob) {
+				drawJob(ctx, { x: service.x + 34, y: service.y + 10 }, dispatchJob.id, accent, ink);
+			}
+		}
 	});
 
 	ctx.save();
@@ -323,53 +386,36 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 	ctx.fillText("LB", lb.x, lb.y + 5);
 	ctx.textAlign = "start";
 
-	ctx.save();
-	ctx.fillStyle = queueJobs.length > 0 ? "rgba(180, 75, 49, 0.12)" : bg;
-	ctx.strokeStyle = ink;
-	ctx.lineWidth = 2;
-	ctx.setLineDash([6, 4]);
-	ctx.beginPath();
-	ctx.roundRect(queue.x - 52, queue.y, 104, 92, 8);
-	ctx.fill();
-	ctx.stroke();
-	ctx.restore();
-	ctx.fillStyle = ink;
-	ctx.font = "700 11px system-ui, sans-serif";
-	ctx.fillText(`FIFO QUEUE ${queueJobs.length}/${QUEUE_LIMIT}`, queue.x - 43, queue.y + 17);
-	ctx.setLineDash([]);
-
-	for (let index = 0; index < QUEUE_LIMIT; index += 1) {
-		const point = queuePoint(index);
-		ctx.fillStyle = index < queueJobs.length ? accent : "rgba(0, 0, 0, 0.08)";
-		ctx.fillRect(point.x - 7, point.y - 7, 14, 14);
-	}
-
 	state.jobs.forEach((job) => {
 		if (job.stage === "network") {
 			const start = { x: clientX + 52, y: clientPoints[job.client]?.y ?? height / 2 };
 			const end = { x: lb.x - 30, y: lb.y };
-			const control = { x: width * 0.29, y: start.y + (end.y - start.y) * 0.35 };
+			const control = { x: width * 0.28, y: start.y + (end.y - start.y) * 0.35 };
 			const progress = Math.min(1, Math.max(0, 1 - Math.max(0, job.remainingMs - elapsedMs) / state.networkMs));
 			drawJob(ctx, quadraticPoint(start, control, end, progress), job.id, accent, ink);
 		}
 
-		if (job.stage === "queue") {
-			const index = queueJobs.findIndex((candidate) => candidate.id === job.id);
-			if (index >= 0) {
-				drawJob(ctx, queuePoint(index), job.id, accent, ink);
-			}
-		}
-
-		if (job.stage === "dispatch" && job.service !== undefined && servicePoints[job.service]) {
-			const start = { x: queue.x + 48, y: queue.y + 28 };
-			const end = { x: servicePoints[job.service].x - 52, y: servicePoints[job.service].y };
-			const control = { x: width * 0.71, y: end.y + (start.y - end.y) * 0.35 };
-			const progress = Math.min(1, Math.max(0, 1 - Math.max(0, job.remainingMs - elapsedMs) / DISPATCH_MS));
+		if (job.stage === "routing" && job.service !== undefined && servicePoints[job.service]) {
+			const start = { x: lb.x + 30, y: lb.y };
+			const end = { x: queueX - 36, y: servicePoints[job.service].y };
+			const control = { x: width * 0.66, y: start.y + (end.y - start.y) * 0.35 };
+			const progress = Math.min(1, Math.max(0, 1 - Math.max(0, job.remainingMs - elapsedMs) / ROUTING_MS));
 			drawJob(ctx, quadraticPoint(start, control, end, progress), job.id, accent, ink);
 		}
 
-		if (job.stage === "service" && job.service !== undefined && servicePoints[job.service]) {
-			drawJob(ctx, { x: servicePoints[job.service].x + 34, y: servicePoints[job.service].y + 10 }, job.id, accent, ink);
+		if (job.stage === "queue" && job.service !== undefined) {
+			const queuedJobs = jobsForWorker(job.service, "queue");
+			const index = queuedJobs.findIndex((candidate) => candidate.id === job.id);
+			if (index >= 0) {
+				drawJob(ctx, queuePoint(job.service, index), job.id, accent, ink);
+			}
+		}
+
+		if (job.stage === "serviceDispatch" && job.service !== undefined && servicePoints[job.service]) {
+			const start = { x: queueX + 36, y: servicePoints[job.service].y };
+			const end = { x: serviceX - 52, y: servicePoints[job.service].y };
+			const progress = Math.min(1, Math.max(0, 1 - Math.max(0, job.remainingMs - elapsedMs) / WORKER_TRAVEL_MS));
+			drawJob(ctx, { x: start.x + (end.x - start.x) * progress, y: start.y }, job.id, accent, ink);
 		}
 	});
 }
@@ -465,8 +511,8 @@ export default function CongestionSimulator() {
 				: current.workerPerformance.slice(0, workers);
 
 			const jobs = current.jobs.map((job) => (
-				job.stage === "service" && job.service !== undefined && job.service >= workers
-					? { ...job, stage: "queue" as const, service: undefined, remainingMs: 0 }
+				job.service !== undefined && job.service >= workers
+					? { ...job, stage: "network" as const, service: randomWorker(workers), remainingMs: current.networkMs }
 					: job
 			));
 
@@ -559,9 +605,9 @@ export default function CongestionSimulator() {
 					role="img"
 					aria-label="Animated diagram of individual clients sending jobs through a load balancer and FIFO queue to individual service workers"
 				>
-					The simulator diagram shows jobs travelling from clients through the load balancer and queue to service workers.
+					The simulator diagram shows jobs travelling from clients through random load-balancer routes into per-worker queues and services.
 				</canvas>
-				<p className={styles.SceneNote}>Jobs move from their client to the load balancer, wait in the FIFO queue, and then travel to an available worker.</p>
+				<p className={styles.SceneNote}>The load balancer picks a worker at random. Jobs wait in that worker&apos;s FIFO queue before travelling into the service.</p>
 			</div>
 
 			<div className={styles.Metrics} aria-live="polite">
@@ -571,7 +617,7 @@ export default function CongestionSimulator() {
 			</div>
 
 			<div className={styles.Footer}>
-				<p>The clock runs by itself. Add or remove clients and workers to create pressure, then watch the finite queue respond.</p>
+				<p>The clock runs by itself. Add or remove clients and workers to create pressure, then watch the independent queues respond.</p>
 				<button type="button" className={styles.Reset} onClick={reset}>Reset</button>
 			</div>
 		</section>

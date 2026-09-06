@@ -11,9 +11,9 @@ export interface ControllerState {
 	sampleCount: number;
 	rttSum: number;
 	warmupSamples: number;
+	gradient2ElapsedMs: number;
 	gradient2TrendSamples: number;
 	gradient2BackoffCooldown: number;
-	gradient2BackoffLatched: boolean;
 }
 
 export interface ClientState {
@@ -85,8 +85,9 @@ export const GRADIENT2_PROBE_STEP = 1;
 export const GRADIENT2_LIMIT_ALPHA = 0.35;
 export const GRADIENT2_BACKOFF_FACTOR = 0.8;
 export const GRADIENT2_BACKOFF_COOLDOWN = 8;
-export const GRADIENT2_PROBE_DELAY_RATIO = 1.15;
 export const GRADIENT2_MAX_LIMIT = 12;
+export const GRADIENT2_CONTROL_INTERVAL_MS = 1000;
+export const GRADIENT2_TARGET_QUEUE = 0.75;
 export const GCRA_STARTUP_RATE = 1;
 export const GCRA_STARTUP_SAMPLES = 8;
 export const GCRA_MAX_RATE = 4;
@@ -103,9 +104,9 @@ function createController(kind: ControllerKind): ControllerState {
 		sampleCount: 0,
 		rttSum: 0,
 		warmupSamples: 0,
+		gradient2ElapsedMs: 0,
 		gradient2TrendSamples: 0,
 		gradient2BackoffCooldown: 0,
-		gradient2BackoffLatched: false,
 	};
 }
 
@@ -169,17 +170,18 @@ export function serviceCapacity(state: SimulationState, performance = state.work
 	return Math.max(1, Math.floor(capacity));
 }
 
-function updateController(controller: ControllerState, rttMs: number, dropped: boolean): ControllerState {
+function updateController(controller: ControllerState, rttMs: number | undefined, dropped: boolean): ControllerState {
 	if (controller.kind === "rate" || controller.kind === "concurrency") {
 		return controller;
 	}
 
+	const hasRttSample = rttMs !== undefined && Number.isFinite(rttMs);
 	const next = {
 		...controller,
-		minRtt: Math.min(controller.minRtt, rttMs),
-		sampleCount: controller.sampleCount + 1,
-		rttSum: controller.rttSum + rttMs,
-		warmupSamples: controller.warmupSamples + (dropped ? 0 : 1),
+		minRtt: hasRttSample ? Math.min(controller.minRtt, rttMs) : controller.minRtt,
+		sampleCount: controller.sampleCount + (hasRttSample ? 1 : 0),
+		rttSum: controller.rttSum + (hasRttSample ? rttMs : 0),
+		warmupSamples: controller.warmupSamples + (hasRttSample && !dropped ? 1 : 0),
 	};
 
 	if (dropped) {
@@ -188,7 +190,7 @@ function updateController(controller: ControllerState, rttMs: number, dropped: b
 			limit: clamp(next.limit * (controller.kind === "gradient2" ? 0.7 : 0.5), 1, MAX_CONTROLLER_LIMIT),
 			gradient2TrendSamples: 0,
 			gradient2BackoffCooldown: controller.kind === "gradient2" ? GRADIENT2_BACKOFF_COOLDOWN : 0,
-			gradient2BackoffLatched: false,
+			gradient2ElapsedMs: controller.kind === "gradient2" ? 0 : controller.gradient2ElapsedMs,
 		};
 	}
 
@@ -212,32 +214,50 @@ function updateController(controller: ControllerState, rttMs: number, dropped: b
 		return { ...next, limit: clamp(limit, 1, MAX_CONTROLLER_LIMIT), sampleCount: 0, rttSum: 0 };
 	}
 
-	const shortRtt = next.shortRtt === 0 ? rttMs : ewma(next.shortRtt, rttMs, GRADIENT2_SHORT_ALPHA);
-	const longRtt = next.longRtt === 0 ? rttMs : ewma(next.longRtt, rttMs, GRADIENT2_LONG_ALPHA);
-	if (next.sampleCount < GRADIENT2_SAMPLE_SIZE) {
+	const shortRtt = hasRttSample
+		? next.shortRtt === 0 ? rttMs : ewma(next.shortRtt, rttMs, GRADIENT2_SHORT_ALPHA)
+		: next.shortRtt;
+	const longRtt = hasRttSample
+		? next.longRtt === 0 ? rttMs : ewma(next.longRtt, rttMs, GRADIENT2_LONG_ALPHA)
+		: next.longRtt;
+	if (shortRtt === 0 || (hasRttSample && next.sampleCount < GRADIENT2_SAMPLE_SIZE)) {
+		return { ...next, shortRtt, longRtt };
+	}
+	if (next.gradient2ElapsedMs < GRADIENT2_CONTROL_INTERVAL_MS) {
 		return { ...next, shortRtt, longRtt };
 	}
 
 	const cooldown = Math.max(0, next.gradient2BackoffCooldown - 1);
 	const divergence = shortRtt / Math.max(longRtt, 1);
-	const delayIsElevated = shortRtt > next.minRtt * GRADIENT2_PROBE_DELAY_RATIO;
-	const recovered = !delayIsElevated && divergence <= GRADIENT2_STABLE_THRESHOLD;
-	const latched = recovered ? false : next.gradient2BackoffLatched;
 	// A backoff starts a new observation period. Do not keep accumulating the
-	// old trend while cooling down or while the delay episode is latched, or a
-	// sustained delay turns into a series of backoffs that eventually drives the
-	// learned limit to one.
-	const trendSamples = cooldown > 0 || latched
+	// old trend while cooling down. Queue pressure is evaluated separately so a
+	// high-limit client continues to correct even after its RTT trend flattens.
+	const trendSamples = cooldown > 0
 		? 0
 		: divergence >= GRADIENT2_RISING_THRESHOLD
 			? next.gradient2TrendSamples + 1
 			: divergence <= GRADIENT2_STABLE_THRESHOLD
 				? Math.max(0, next.gradient2TrendSamples - 1)
 				: next.gradient2TrendSamples;
-	const backingOff = trendSamples >= GRADIENT2_TREND_SAMPLES && cooldown === 0;
-	const probing = cooldown === 0 && divergence <= GRADIENT2_STABLE_THRESHOLD && !delayIsElevated;
+	const queueEstimate = next.limit * (1 - next.minRtt / Math.max(shortRtt, 1));
+	const backingOff = cooldown === 0 && (
+		trendSamples >= GRADIENT2_TREND_SAMPLES
+		|| queueEstimate > GRADIENT2_TARGET_QUEUE
+	);
+	// After a backoff, stable trend is enough to resume a slow additive probe.
+	// Requiring the absolute RTT to return to baseline here permanently starves
+	// a cold client when another client keeps the shared queue warm.
+	const probing = cooldown === 0 && divergence <= GRADIENT2_STABLE_THRESHOLD && !backingOff;
+	// A rising RTT is not just a boolean congestion signal. The ratio to the
+	// client's own minimum RTT tells us how far its target overshot the current
+	// operating point. Applying that ratio to the local limit makes a large,
+	// aggressive client give up proportionally more work than a small client.
+	const delayBackoffFactor = Math.min(
+		GRADIENT2_BACKOFF_FACTOR,
+		next.minRtt / Math.max(shortRtt, 1),
+	);
 	const targetLimit = backingOff
-		? next.limit * GRADIENT2_BACKOFF_FACTOR
+		? next.limit * delayBackoffFactor
 		: probing
 			? next.limit + GRADIENT2_PROBE_STEP
 			: next.limit;
@@ -249,7 +269,7 @@ function updateController(controller: ControllerState, rttMs: number, dropped: b
 		longRtt,
 		gradient2TrendSamples: backingOff ? 0 : trendSamples,
 		gradient2BackoffCooldown: backingOff ? GRADIENT2_BACKOFF_COOLDOWN : cooldown,
-		gradient2BackoffLatched: backingOff ? true : latched,
+		gradient2ElapsedMs: 0,
 		sampleCount: 0,
 		rttSum: 0,
 	};
@@ -297,10 +317,20 @@ function updateClients(
 		const sentInWindow = client.metrics.sentInWindow + sentByClient[index];
 		const sentWindowMs = client.metrics.sentWindowMs + TICK_MS;
 		const hasRateSample = sentWindowMs >= METRIC_SAMPLE_WINDOW_MS;
-		const controller = clientSamples.reduce(
+		let controller = {
+			...client.controller,
+			gradient2ElapsedMs: client.controller.gradient2ElapsedMs + TICK_MS,
+		};
+		controller = clientSamples.reduce(
 			(current, sample) => updateController(current, sample.rttMs, sample.dropped),
-			client.controller,
+			controller,
 		);
+		// Gradient2 changes its target on a wall-clock cadence, not once per
+		// completion. This gives a high-RPS client and a low-RPS client the same
+		// number of probe opportunities while each still supplies its own RTT.
+		if (controller.kind === "gradient2") {
+			controller = updateController(controller, undefined, false);
+		}
 
 		return {
 			...client,

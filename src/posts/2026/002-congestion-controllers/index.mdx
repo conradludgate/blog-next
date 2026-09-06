@@ -1,0 +1,24 @@
+import CongestionSimulator from "@/components/CongestionSimulator";
+
+export const meta = {
+  title: "A simulator-first tour of congestion control",
+  date: "2026-09-06",
+  tags: ["dev", "performance", "distributed-systems"],
+  desc: "Why fixed rate and concurrency limits struggle, and how congestion controllers adapt.",
+};
+
+Rate limits and concurrency limits are simple, useful tools. They also hide an awkward question: how did we decide what the limit should be?
+
+This post will work towards an answer by making the system interactive. Start with the experiment below. Every step is manual on purpose: the interesting event should happen because you changed something.
+
+<CongestionSimulator />
+
+## What this first experiment shows
+
+The service has a small FIFO queue in front of four workers. Each request takes 250ms when the service is healthy, so the service can complete roughly 16 requests per second. The shared network and load-balancer path adds another 80ms to what the client observes.
+
+With a rate limit, every client keeps sending at the same rate even when the service slows down. Adding clients multiplies the offered rate, and the queue can grow without bound.
+
+With a concurrency limit, the client keeps a fixed number of requests in flight. As observed latency rises, the client naturally sends less work. That is already a useful improvement—but it still needs a way to choose and adjust the concurrency limit.
+
+The next iterations will add the metrics that help us understand the system—USE for resource health and RED for request health—then use the same surface to explore client-side congestion controllers such as Vegas and Gradient2.

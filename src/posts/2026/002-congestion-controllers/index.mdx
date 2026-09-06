@@ -23,4 +23,6 @@ With a concurrency limit, the client keeps a fixed number of requests in flight.
 
 The three adaptive controllers make that choice continuously. AIMD increases its window cautiously and cuts it when a request is rejected. Vegas watches for extra delay before the queue fills. Gradient2 compares short- and long-term latency, looking for a trend rather than reacting to one noisy sample.
 
+The adaptive clients also need to decide when to send. Each one turns its local target concurrency `L` and latency estimate `W` into a rate using Little's Law, `λ = L / W`. A small GCRA-style theoretical-arrival clock spaces those requests out, so the target window does not arrive as a burst. The pacing is implicit in the simulation; the visible thing is the work moving steadily through the network.
+
 The next iterations will add the metrics that help us understand the system—USE for resource health and RED for request health—and make the controller feedback visible in more detail.

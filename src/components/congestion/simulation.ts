@@ -10,11 +10,12 @@ export interface ControllerState {
 	longRtt: number;
 	sampleCount: number;
 	rttSum: number;
+	warmupSamples: number;
 }
 
 export interface ClientState {
 	controller: ControllerState;
-	rateCredit: number;
+	tatMs: number;
 	metrics: ClientMetrics;
 }
 
@@ -71,15 +72,16 @@ export const METRIC_SAMPLE_WINDOW_MS = 2000;
 export const VEGAS_SAMPLE_SIZE = 4;
 export const VEGAS_ALPHA = 0.25;
 export const VEGAS_BETA = 0.75;
-export const GRADIENT2_SAMPLE_SIZE = 4;
+export const GRADIENT2_SAMPLE_SIZE = 1;
 export const GRADIENT2_SHORT_ALPHA = 0.35;
 export const GRADIENT2_LONG_ALPHA = 0.08;
-export const GRADIENT2_RISING_THRESHOLD = 1.03;
-export const GRADIENT2_TARGET_QUEUE = 0.5;
-export const GRADIENT2_MAX_QUEUE = 1.5;
-export const GRADIENT2_PROBE_STEP = 0.5;
-export const GRADIENT2_LIMIT_ALPHA = 0.35;
+export const GRADIENT2_RISING_THRESHOLD = 1.05;
+export const GRADIENT2_PROBE_STEP = 1;
+export const GRADIENT2_LIMIT_ALPHA = 0.5;
 export const GRADIENT2_BACKOFF_FACTOR = 0.7;
+export const GCRA_STARTUP_RATE = 1;
+export const GCRA_STARTUP_SAMPLES = 8;
+export const GCRA_MAX_RATE = 4;
 
 function createController(kind: ControllerKind): ControllerState {
 	return {
@@ -92,13 +94,14 @@ function createController(kind: ControllerKind): ControllerState {
 		longRtt: 0,
 		sampleCount: 0,
 		rttSum: 0,
+		warmupSamples: 0,
 	};
 }
 
 function createClient(kind: ControllerKind): ClientState {
 	return {
 		controller: createController(kind),
-		rateCredit: 0,
+		tatMs: 0,
 		metrics: {
 			sentRate: 0,
 			latencyMs: BASELINE_LATENCY_MS,
@@ -137,7 +140,9 @@ function randomPerformance(): number {
 }
 
 function fluctuatePerformance(performance: number): number {
-	return Math.max(0.7, Math.min(1.35, performance * (0.9 + Math.random() * 0.2)));
+	const meanReversion = (1 - performance) * 0.08;
+	const jitter = (Math.random() - 0.5) * 0.08;
+	return clamp(performance + meanReversion + jitter, 0.75, 1.25);
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -163,6 +168,7 @@ function updateController(controller: ControllerState, rttMs: number, dropped: b
 		minRtt: Math.min(controller.minRtt, rttMs),
 		sampleCount: controller.sampleCount + 1,
 		rttSum: controller.rttSum + rttMs,
+		warmupSamples: controller.warmupSamples + (dropped ? 0 : 1),
 	};
 
 	if (dropped) {
@@ -199,14 +205,8 @@ function updateController(controller: ControllerState, rttMs: number, dropped: b
 	}
 
 	const divergence = shortRtt / Math.max(longRtt, 1);
-	const queueEstimate = next.limit * (1 - next.minRtt / Math.max(shortRtt, 1));
-	const backingOff = divergence >= GRADIENT2_RISING_THRESHOLD || queueEstimate > GRADIENT2_MAX_QUEUE;
-	const holding = queueEstimate >= GRADIENT2_TARGET_QUEUE;
-	const targetLimit = backingOff
-		? next.limit * GRADIENT2_BACKOFF_FACTOR
-		: holding
-			? next.limit
-			: next.limit + GRADIENT2_PROBE_STEP;
+	const backingOff = divergence >= GRADIENT2_RISING_THRESHOLD;
+	const targetLimit = backingOff ? next.limit * GRADIENT2_BACKOFF_FACTOR : next.limit + GRADIENT2_PROBE_STEP;
 
 	return {
 		...next,
@@ -228,6 +228,19 @@ function clientLimit(client: ClientState, strategy: ControllerKind): number {
 
 function ewma(previous: number, sample: number, alpha = METRIC_EWMA_ALPHA): number {
 	return previous + alpha * (sample - previous);
+}
+
+function clientRate(client: ClientState, strategy: ControllerKind): number {
+	if (strategy === "rate") {
+		return RATE_PER_CLIENT;
+	}
+	if (strategy === "concurrency") {
+		return 0;
+	}
+
+	const lawRate = client.controller.limit * (1000 / Math.max(client.metrics.latencyMs, 1));
+	const startupProbe = client.controller.warmupSamples < GCRA_STARTUP_SAMPLES ? GCRA_STARTUP_RATE : 0;
+	return clamp(Math.max(lawRate, startupProbe), 0.1, GCRA_MAX_RATE);
 }
 
 function updateClients(
@@ -377,7 +390,7 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 
 	const sentByClient = current.clients.map(() => 0);
 	let nextJobId = current.nextJobId;
-	const rateCredits = current.clients.map((client) => client.rateCredit + (current.strategy === "rate" ? RATE_PER_CLIENT * (TICK_MS / 1000) : 0));
+	const tats = current.clients.map((client) => client.tatMs);
 	const inFlights = current.clients.map((_, clientIndex) => jobs.filter((job) => job.client === clientIndex).length);
 	let admitted = true;
 	while (admitted) {
@@ -386,20 +399,30 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 		// than whichever client happens to be first in the array.
 		current.clients.forEach((client, clientIndex) => {
 			const limit = clientLimit(client, current.strategy);
-			const shouldSend = current.strategy === "rate" ? rateCredits[clientIndex] >= 1 : inFlights[clientIndex] < limit;
+			if (current.strategy !== "concurrency") {
+				const intervalMs = 1000 / clientRate(client, current.strategy);
+				// A rate increase should be visible immediately; do not let a previous,
+				// slower TAT postpone the first request at the new rate.
+				if (tats[clientIndex] > nowMs + intervalMs) {
+					tats[clientIndex] = nowMs + intervalMs;
+				}
+			}
+			const shouldSend = current.strategy === "concurrency" ? inFlights[clientIndex] < limit : nowMs >= tats[clientIndex];
 			if (!shouldSend) return;
 
 			jobs.push({ id: nextJobId, client: clientIndex, stage: "network", remainingMs: current.networkMs, createdAt: nowMs });
 			nextJobId += 1;
 			sentByClient[clientIndex] += 1;
-			inFlights[clientIndex] += 1;
-			if (current.strategy === "rate") {
-				rateCredits[clientIndex] -= 1;
+			if (current.strategy === "concurrency") {
+				inFlights[clientIndex] += 1;
+			} else {
+				const intervalMs = 1000 / clientRate(client, current.strategy);
+				tats[clientIndex] = Math.max(tats[clientIndex], current.nowMs) + intervalMs;
 			}
 			admitted = true;
 		});
 	}
-	const clientsWithJobs = current.clients.map((client, clientIndex) => ({ ...client, rateCredit: rateCredits[clientIndex] }));
+	const clientsWithJobs = current.clients.map((client, clientIndex) => ({ ...client, tatMs: tats[clientIndex] }));
 	const clients = updateClients(clientsWithJobs, completedSamples, sentByClient);
 
 	const queueDepth = jobs.filter((job) => job.stage === "queue").length;

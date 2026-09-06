@@ -4,39 +4,52 @@
 	--sim-accent: #b44b31;
 	--sim-accent-soft: color-mix(in srgb, var(--sim-accent) 14%, var(--color-bg));
 	margin: 2.5rem 0;
-	padding: 1.25rem;
+	padding: 1.15rem;
 	border: 1px solid var(--sim-border);
-	border-radius: 0.75rem;
+	border-radius: 0.65rem;
 	background: var(--color-bg-secondary);
 }
 
-.Heading {
+.Header {
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
 	gap: 1rem;
 }
 
-.Heading h2 {
-	margin: 0.15rem 0 0;
-	font-size: 1.35rem;
-}
-
-.Eyebrow {
+.Eyebrow,
+.NodeLabel,
+.ActionLabel {
 	margin: 0;
 	color: var(--sim-accent);
-	font-size: 0.8rem;
+	font-size: 0.72rem;
 	font-weight: 700;
-	letter-spacing: 0.08em;
+	letter-spacing: 0.07em;
 	text-transform: uppercase;
+}
+
+.Header h2 {
+	margin: 0.15rem 0 0;
+	font-size: 1.3rem;
+}
+
+.HeaderControls {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.Clock {
+	color: var(--sim-muted);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
 }
 
 .Healthy,
 .Warning {
-	flex: 0 0 auto;
-	padding: 0.35rem 0.6rem;
+	padding: 0.3rem 0.5rem;
 	border-radius: 999px;
-	font-size: 0.8rem;
+	font-size: 0.75rem;
 	font-weight: 700;
 }
 
@@ -50,17 +63,10 @@
 	background: #f5d8cc;
 }
 
-.ModeSwitcher {
-	display: flex;
-	gap: 0.5rem;
-	margin-top: 1.25rem;
-	padding-bottom: 0.75rem;
-	border-bottom: 1px solid var(--sim-border);
-}
-
+.Play,
 .ModeSwitcher button,
 .Actions button {
-	padding: 0.55rem 0.75rem;
+	padding: 0.45rem 0.65rem;
 	border: 1px solid var(--sim-border);
 	border-radius: 0.35rem;
 	background: var(--color-bg);
@@ -69,9 +75,16 @@
 	cursor: pointer;
 }
 
+.Play:hover,
 .ModeSwitcher button:hover,
 .Actions button:hover {
 	border-color: var(--sim-accent);
+}
+
+.ModeSwitcher {
+	display: flex;
+	gap: 0.35rem;
+	margin-top: 1rem;
 }
 
 .ModeSwitcher .Selected {
@@ -81,63 +94,68 @@
 }
 
 .Description {
-	margin: 1rem 0;
+	margin: 0.65rem 0 0;
 	color: var(--sim-muted);
+	font-size: 0.9rem;
 }
 
 .Actions {
 	display: flex;
+	align-items: center;
 	flex-wrap: wrap;
-	gap: 0.5rem;
-}
-
-.Actions .PrimaryAction {
-	border-color: var(--sim-accent);
-	background: var(--sim-accent);
-	color: white;
+	gap: 0.4rem;
+	margin-top: 1rem;
+	padding-top: 0.85rem;
+	border-top: 1px solid var(--sim-border);
 }
 
 .Actions .Reset {
 	margin-left: auto;
+	color: var(--sim-muted);
 }
 
 .System {
 	display: grid;
-	grid-template-columns: 1fr auto 1.15fr auto 1.15fr auto 1fr;
+	grid-template-columns: 1.2fr 0.8fr 0.8fr 0.8fr 1.2fr;
 	align-items: center;
-	gap: 0.65rem;
-	margin-top: 1.5rem;
+	gap: 0.55rem;
+	margin-top: 1.1rem;
 }
 
-.Stage {
+.Node,
+.Queue {
 	display: flex;
 	flex-direction: column;
-	gap: 0.25rem;
-	min-height: 7.25rem;
 	justify-content: center;
-	padding: 0.75rem;
+	gap: 0.2rem;
+	min-height: 7.6rem;
+	padding: 0.8rem;
 	border: 1px solid var(--sim-border);
-	border-radius: 0.5rem;
+	border-radius: 0.45rem;
 	background: var(--color-bg);
 }
 
-.StageLabel {
-	color: var(--sim-accent);
-	font-size: 0.7rem;
-	font-weight: 700;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
+.Queue {
+	border-style: dashed;
+	background: transparent;
 }
 
-.StageDetail,
+.QueueActive {
+	border-color: var(--sim-accent);
+	background: var(--sim-accent-soft);
+}
+
+.NodeValue {
+	font-size: 1.55rem;
+	font-variant-numeric: tabular-nums;
+	line-height: 1;
+}
+
+.NodeDetail,
+.Link,
 .Metrics span {
 	color: var(--sim-muted);
-	font-size: 0.85rem;
-}
-
-.Arrow {
-	color: var(--sim-muted);
-	font-size: 1.5rem;
+	font-size: 0.78rem;
 }
 
 .Clients,
@@ -145,46 +163,55 @@
 	display: flex;
 	align-items: center;
 	gap: 0.25rem;
-	min-height: 1.25rem;
+	min-height: 1rem;
+	margin-top: 0.35rem;
 }
 
-.Client,
+.Clients span,
 .Workers span {
 	display: block;
-	width: 0.8rem;
-	height: 0.8rem;
-	border-radius: 0.15rem;
-	background: var(--sim-border);
+	width: 0.72rem;
+	height: 0.72rem;
+	border-radius: 0.12rem;
+	background: var(--sim-accent);
+	opacity: 0.55;
 }
 
-.Client:first-child,
-.BusyWorker {
-	background: var(--sim-accent) !important;
-}
-
-.More {
+.Clients b {
 	color: var(--sim-muted);
-	font-size: 0.8rem;
+	font-size: 0.78rem;
 }
 
-.NetworkLine {
+.BusyWorker {
+	opacity: 1 !important;
+}
+
+.Link {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.25rem;
+	text-align: center;
+}
+
+.LinkLine {
 	display: flex;
 	align-items: center;
 	gap: 0.3rem;
-	min-height: 1.25rem;
+	height: 1rem;
 }
 
-.NetworkLine span {
+.LinkLine i {
 	display: block;
-	width: 0.4rem;
-	height: 0.4rem;
+	width: 0.35rem;
+	height: 0.35rem;
 	border-radius: 50%;
 	background: var(--sim-accent);
 }
 
 .Track {
-	height: 0.65rem;
-	margin-top: 0.35rem;
+	height: 0.5rem;
+	margin-top: 0.4rem;
 	overflow: hidden;
 	border-radius: 999px;
 	background: var(--sim-border);
@@ -194,58 +221,69 @@
 	height: 100%;
 	border-radius: inherit;
 	background: var(--sim-accent);
-	transition: width 0.2s ease;
+	transition: width 0.25s ease;
 }
 
 .Metrics {
 	display: grid;
-	grid-template-columns: repeat(5, 1fr);
-	gap: 0.75rem;
-	margin-top: 1rem;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 0.55rem;
+	margin-top: 0.65rem;
 }
 
 .Metrics > div {
 	display: flex;
-	flex-direction: column;
-	gap: 0.2rem;
-	padding: 0.7rem;
-	border-radius: 0.4rem;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 0.5rem;
+	padding: 0.6rem 0.7rem;
+	border-radius: 0.35rem;
 	background: var(--color-bg);
 }
 
-.Hint {
-	margin: 1rem 0 0;
-	color: var(--sim-muted);
-	font-size: 0.9rem;
+.Metrics strong {
+	font-variant-numeric: tabular-nums;
 }
 
-@media only screen and (max-width: 600px) {
-	.Simulator {
-		padding: 1rem;
-	}
+.Hint {
+	margin: 0.75rem 0 0;
+	color: var(--sim-muted);
+	font-size: 0.85rem;
+}
 
-	.Heading {
+@media only screen and (max-width: 700px) {
+	.Header {
 		flex-direction: column;
 	}
 
-	.Actions .Reset {
-		margin-left: 0;
+	.HeaderControls {
+		width: 100%;
+		justify-content: space-between;
 	}
 
 	.System {
 		grid-template-columns: 1fr;
 	}
 
-	.Arrow {
-		text-align: center;
+	.Link {
+		min-height: 2.2rem;
+	}
+
+	.LinkLine {
 		transform: rotate(90deg);
 	}
 
+	.Actions .Reset {
+		margin-left: 0;
+	}
+}
+
+@media only screen and (max-width: 430px) {
 	.Metrics {
-		grid-template-columns: repeat(2, 1fr);
+		grid-template-columns: 1fr;
 	}
 
-	.Stage {
-		min-height: 6rem;
+	.Metrics > div {
+		padding-block: 0.5rem;
 	}
 }

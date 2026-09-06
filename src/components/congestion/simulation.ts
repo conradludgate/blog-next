@@ -69,14 +69,14 @@ export const METRIC_SAMPLE_WINDOW_MS = 2000;
 // These values are deliberately tuned for the simulator's small, slow system:
 // four workers, roughly 4 jobs/s of capacity, and a ~2.75s unloaded RTT.
 export const VEGAS_SAMPLE_SIZE = 4;
-export const VEGAS_ALPHA = 2;
-export const VEGAS_BETA = 4;
+export const VEGAS_ALPHA = 0.25;
+export const VEGAS_BETA = 0.75;
 export const GRADIENT2_SAMPLE_SIZE = 4;
 export const GRADIENT2_SHORT_ALPHA = 0.35;
 export const GRADIENT2_LONG_ALPHA = 0.08;
-export const GRADIENT2_RISING_THRESHOLD = 1.05;
-export const GRADIENT2_TARGET_QUEUE = 2;
-export const GRADIENT2_MAX_QUEUE = 4;
+export const GRADIENT2_RISING_THRESHOLD = 1.03;
+export const GRADIENT2_TARGET_QUEUE = 0.5;
+export const GRADIENT2_MAX_QUEUE = 1.5;
 export const GRADIENT2_PROBE_STEP = 0.5;
 export const GRADIENT2_LIMIT_ALPHA = 0.35;
 export const GRADIENT2_BACKOFF_FACTOR = 0.7;
@@ -84,7 +84,9 @@ export const GRADIENT2_BACKOFF_FACTOR = 0.7;
 function createController(kind: ControllerKind): ControllerState {
 	return {
 		kind,
-		limit: kind === "concurrency" ? FIXED_CONCURRENCY_PER_CLIENT : kind === "rate" ? 1 : 2,
+		// Adaptive clients begin with one request so their first RTT samples can
+		// establish an unloaded baseline before they probe for more capacity.
+		limit: kind === "concurrency" ? FIXED_CONCURRENCY_PER_CLIENT : 1,
 		minRtt: Number.POSITIVE_INFINITY,
 		shortRtt: 0,
 		longRtt: 0,
@@ -224,10 +226,6 @@ function clientLimit(client: ClientState, strategy: ControllerKind): number {
 	return Math.max(1, Math.floor(client.controller.limit));
 }
 
-function isAdaptive(strategy: ControllerKind): boolean {
-	return strategy === "aimd" || strategy === "vegas" || strategy === "gradient2";
-}
-
 function ewma(previous: number, sample: number, alpha = METRIC_EWMA_ALPHA): number {
 	return previous + alpha * (sample - previous);
 }
@@ -291,23 +289,8 @@ export function setClientCount(current: SimulationState, count: number): Simulat
 		: current.clients.slice(0, clients);
 	const removedJobs = current.jobs.filter((job) => job.client >= clients);
 	const jobs = current.jobs.filter((job) => job.client < clients);
-	const nextClients = isAdaptive(current.strategy)
-		? (() => {
-			// A scale event changes the number of independent controllers. Keep the
-			// aggregate window stable, but give every controller an equal starting share.
-			const fairLimit = clamp(
-				current.clients.reduce((total, client) => total + client.controller.limit, 0) / clients,
-				1,
-				MAX_CONTROLLER_LIMIT,
-			);
-			return resizedClients.map((client) => ({
-				...client,
-				controller: { ...client.controller, limit: fairLimit },
-			}));
-		})()
-		: resizedClients;
 
-	return { ...current, clients: nextClients, jobs, dropped: current.dropped + removedJobs.length };
+	return { ...current, clients: resizedClients, jobs, dropped: current.dropped + removedJobs.length };
 }
 
 export function setWorkerCount(current: SimulationState, count: number): SimulationState {

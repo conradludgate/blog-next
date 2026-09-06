@@ -11,7 +11,9 @@
 }
 
 .Header,
-.NodeHeader,
+.ColumnHeader,
+.EndpointHeader,
+.QueueHeader,
 .Footer {
 	display: flex;
 	align-items: flex-start;
@@ -20,7 +22,7 @@
 }
 
 .Eyebrow,
-.NodeLabel {
+.ColumnLabel {
 	margin: 0;
 	color: var(--sim-accent);
 	font-size: 0.72rem;
@@ -136,35 +138,79 @@
 
 .System {
 	display: grid;
-	grid-template-columns: 1.2fr 0.65fr 0.9fr 0.65fr 1.2fr;
-	align-items: center;
-	gap: 0.55rem;
-	margin-top: 1.1rem;
+	grid-template-columns: minmax(9rem, 1fr) minmax(11rem, 1.15fr) minmax(9rem, 1fr);
+	align-items: start;
+	gap: 0.9rem;
+	margin-top: 1.25rem;
 }
 
-.Node,
-.Queue {
+.ClientColumn,
+.NetworkColumn,
+.ServiceColumn {
 	display: flex;
 	flex-direction: column;
-	justify-content: center;
-	gap: 0.2rem;
-	min-height: 7.6rem;
-	padding: 0.8rem;
+	gap: 0.5rem;
+	min-width: 0;
+}
+
+.ColumnHeader {
+	align-items: center;
+	min-height: 2.25rem;
+	padding-bottom: 0.35rem;
+	border-bottom: 1px solid var(--sim-border);
+}
+
+.ColumnDetail,
+.EndpointDetail,
+.QueueCount,
+.EndpointHeader span,
+.Footer p {
+	display: block;
+	color: var(--sim-muted);
+	font-size: 0.78rem;
+}
+
+.ColumnDetail {
+	margin-top: 0.15rem;
+}
+
+.Endpoint {
+	position: relative;
+	min-height: 4.3rem;
+	padding: 0.65rem 0.75rem;
 	border: 2px solid var(--color-fg);
-	border-radius: 0.55rem;
+	border-radius: 0.45rem;
 	background: var(--color-bg);
 	box-shadow: 3px 3px 0 var(--sim-accent);
 }
 
-.Queue {
-	border-style: dashed;
-	box-shadow: none;
-	transform: rotate(-0.5deg);
+.EndpointHeader {
+	align-items: baseline;
+	gap: 0.5rem;
 }
 
-.QueueActive {
+.EndpointHeader strong {
+	font-size: 0.95rem;
+}
+
+.EndpointDetail {
+	margin-top: 0.2rem;
+}
+
+.ClientMark,
+.WorkerMark {
+	display: block;
+	width: 0.75rem;
+	height: 0.75rem;
+	margin-top: 0.45rem;
+	border: 1.5px solid var(--sim-accent);
+	border-radius: 0.12rem;
 	background: var(--sim-accent-soft);
-	box-shadow: 3px 3px 0 var(--sim-accent);
+}
+
+.WorkerMark {
+	border-radius: 50%;
+	transition: opacity 0.25s ease, background-color 0.25s ease;
 }
 
 .Stepper {
@@ -179,98 +225,79 @@
 	line-height: 1;
 }
 
-.NodeValue {
-	font-size: 1.55rem;
+.NetworkHeader {
+	min-height: 2.25rem;
+}
+
+.NetworkStage {
+	position: relative;
+	overflow: hidden;
+	margin: 0.15rem 0 0;
+	border-left: 1px solid var(--sim-border);
+	border-right: 1px solid var(--sim-border);
+	background: color-mix(in srgb, var(--color-bg-secondary) 45%, transparent);
+}
+
+.NetworkRail {
+	position: absolute;
+	right: 0.5rem;
+	left: 0.5rem;
+	height: 1.3rem;
+	border-top: 1px dashed var(--sim-border);
+}
+
+.NetworkRail span {
+	position: absolute;
+	top: -0.55rem;
+	left: -0.35rem;
+	padding: 0 0.2rem;
+	background: var(--color-bg);
+	color: var(--sim-muted);
+	font-size: 0.68rem;
 	font-variant-numeric: tabular-nums;
-	line-height: 1;
 }
 
-.NodeValue small {
-	color: var(--sim-muted);
-	font-size: 0.8rem;
-	font-weight: 400;
-}
-
-.NodeDetail,
-.Link,
-.Metrics span,
-.Footer p {
-	color: var(--sim-muted);
-	font-size: 0.78rem;
-}
-
-.Clients,
-.Workers {
-	display: flex;
-	align-items: center;
-	gap: 0.25rem;
-	min-height: 1rem;
-	margin-top: 0.35rem;
-}
-
-.Clients span,
-.Workers span {
-	display: block;
-	width: 0.72rem;
-	height: 0.72rem;
-	border: 1.5px solid var(--sim-accent);
-	border-radius: 0.12rem;
-	background: var(--sim-accent-soft);
-	opacity: 0.7;
-	transition: opacity 0.25s ease, transform 0.25s ease;
-}
-
-.Workers span {
-	border-radius: 50%;
-}
-
-.Clients b {
-	color: var(--sim-muted);
-	font-size: 0.78rem;
-}
-
-.BusyWorker {
-	background: var(--sim-accent) !important;
-	box-shadow: 0 0 0 2px var(--sim-accent-soft);
-}
-
-.Link {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 0.25rem;
-	text-align: center;
-}
-
-.LinkLine {
-	display: flex;
-	align-items: center;
-	gap: 0.3rem;
-	height: 1rem;
-}
-
-.LinkLine i {
-	display: block;
-	width: 0.35rem;
-	height: 0.35rem;
+.Job {
+	position: absolute;
+	left: -0.4rem;
+	width: 0.8rem;
+	height: 0.8rem;
+	border: 2px solid var(--color-fg);
 	border-radius: 50%;
 	background: var(--sim-accent);
-	animation: packet 1.4s ease-in-out infinite;
+	box-shadow: 0 0 0 3px var(--sim-accent-soft);
+	animation-name: travel;
+	animation-timing-function: linear;
+	animation-iteration-count: 1;
+	animation-fill-mode: both;
 }
 
-.LinkLine i:nth-child(2) {
-	animation-delay: 0.18s;
+.Queue {
+	padding: 0.75rem;
+	border: 2px dashed var(--color-fg);
+	border-radius: 0.45rem;
+	background: var(--color-bg);
+	transform: rotate(-0.5deg);
 }
 
-.LinkLine i:nth-child(3) {
-	animation-delay: 0.36s;
+.QueueActive {
+	background: var(--sim-accent-soft);
+	box-shadow: 3px 3px 0 var(--sim-accent);
+}
+
+.QueueHeader {
+	align-items: baseline;
+}
+
+.QueueCount {
+	font-variant-numeric: tabular-nums;
 }
 
 .QueueSlots {
 	display: grid;
 	grid-template-columns: repeat(4, 1fr);
 	gap: 0.25rem;
-	margin-top: 0.45rem;
+	margin-top: 0.55rem;
 }
 
 .QueueSlots span {
@@ -282,6 +309,13 @@
 .QueueSlots .Queued {
 	border-color: var(--sim-accent);
 	background: var(--sim-accent);
+	animation: queueArrive 0.35s ease-out;
+}
+
+.BusyWorker {
+	background: var(--sim-accent) !important;
+	box-shadow: 0 0 0 3px var(--sim-accent-soft);
+	animation: workerPulse 1.2s ease-in-out infinite;
 }
 
 .Metrics {
@@ -299,6 +333,11 @@
 	gap: 0.5rem;
 	padding: 0.6rem 0;
 	border-bottom: 1px solid var(--sim-border);
+}
+
+.Metrics span {
+	color: var(--sim-muted);
+	font-size: 0.78rem;
 }
 
 .Metrics strong {
@@ -319,16 +358,45 @@
 	color: var(--sim-muted);
 }
 
-@keyframes packet {
+@keyframes travel {
+	0% {
+		opacity: 0;
+		transform: translateX(0) scale(0.75);
+	}
+
+	12% {
+		opacity: 1;
+	}
+
+	88% {
+		opacity: 1;
+	}
+
+	100% {
+		left: calc(100% - 0.4rem);
+		opacity: 0;
+		transform: translateX(0) scale(1);
+	}
+}
+
+@keyframes queueArrive {
+	0% {
+		transform: scale(0.65);
+	}
+
+	100% {
+		transform: scale(1);
+	}
+}
+
+@keyframes workerPulse {
 	0%,
 	100% {
-		opacity: 0.35;
-		transform: translateX(-0.15rem) scale(0.85);
+		transform: scale(1);
 	}
 
 	50% {
-		opacity: 1;
-		transform: translateX(0.15rem) scale(1.1);
+		transform: scale(1.12);
 	}
 }
 
@@ -346,12 +414,20 @@
 		grid-template-columns: 1fr;
 	}
 
-	.Link {
-		min-height: 2.2rem;
+	.NetworkColumn {
+		order: 2;
 	}
 
-	.LinkLine {
-		transform: rotate(90deg);
+	.ServiceColumn {
+		order: 3;
+	}
+
+	.ClientColumn {
+		order: 1;
+	}
+
+	.NetworkStage {
+		min-height: 5rem !important;
 	}
 
 	.Footer {
@@ -367,7 +443,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.LinkLine i {
+	.Job,
+	.Queued,
+	.BusyWorker {
 		animation: none;
 	}
 }

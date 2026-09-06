@@ -6,7 +6,7 @@ import {
 	advanceSimulation,
 	createInitialState,
 	FIXED_CONCURRENCY_PER_CLIENT,
-	QUEUE_LIMIT_PER_WORKER,
+	SHARED_QUEUE_LIMIT,
 	MAX_CLIENTS,
 	MAX_WORKERS,
 	RATE_PER_CLIENT,
@@ -18,7 +18,7 @@ import {
 	WORKER_TRAVEL_MS,
 	ROUTING_MS,
 } from "./congestion/simulation";
-import type { ControllerKind, JobStage, SimulationState } from "./congestion/simulation";
+import type { ControllerKind, SimulationState } from "./congestion/simulation";
 
 function stackPosition(count: number, index: number, top: number, bottom: number): number {
 	if (count === 1) {
@@ -118,7 +118,7 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 	const accent = "#b44b31";
 	const clientX = 72;
 	const serviceX = width - 72;
-	const queueX = serviceX - 126;
+	const queueX = width * 0.66;
 	const lb = { x: width * 0.42, y: height / 2 };
 	const nodeTop = 52;
 	const nodeBottom = height - 52;
@@ -130,17 +130,17 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 		x: serviceX,
 		y: stackPosition(state.workers, index, nodeTop, nodeBottom),
 	}));
-	const queuePoint = (worker: number, index: number): Point => ({
-		x: queueX - 18 + (index % 2) * 20,
-		y: servicePoints[worker].y + 5 + Math.floor(index / 2) * 17,
+	const queuePoint = (index: number): Point => ({
+		x: queueX - 31 + (index % 4) * 20,
+		y: lb.y - 18 + Math.floor(index / 4) * 19,
 	});
-	const jobsForWorker = (worker: number, stage: JobStage) => state.jobs.filter((job) => job.stage === stage && job.service === worker);
+	const queuedJobs = state.jobs.filter((job) => job.stage === "queue");
 
 	ctx.clearRect(0, 0, width, height);
 	ctx.fillStyle = ink;
 	ctx.font = "700 11px system-ui, sans-serif";
 	ctx.fillText("CLIENTS", 20, 22);
-	ctx.fillText("RANDOM ROUTING", lb.x - 44, 22);
+	ctx.fillText("LOAD BALANCER", lb.x - 40, 22);
 	ctx.fillText("SERVICE WORKERS", width - 124, 22);
 
 	clientPoints.forEach((client) => {
@@ -150,14 +150,14 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 		drawArrow(ctx, quadraticPoint({ x: client.x + 52, y: client.y }, control, end, 0.97), Math.atan2(end.y - control.y, end.x - control.x), "rgba(0, 0, 0, 0.35)");
 	});
 
-	servicePoints.forEach((service) => {
-		const routingStart = { x: lb.x + 30, y: lb.y };
-		const routingEnd = { x: queueX - 36, y: service.y };
-		const routingControl = { x: width * 0.66, y: routingStart.y + (routingEnd.y - routingStart.y) * 0.35 };
-		drawPath(ctx, routingStart, routingControl, routingEnd, "rgba(0, 0, 0, 0.24)");
-		drawArrow(ctx, quadraticPoint(routingStart, routingControl, routingEnd, 0.97), Math.atan2(routingEnd.y - routingControl.y, routingEnd.x - routingControl.x), "rgba(0, 0, 0, 0.35)");
+	const routingStart = { x: lb.x + 30, y: lb.y };
+	const routingEnd = { x: queueX - 52, y: lb.y };
+	const routingControl = { x: (routingStart.x + routingEnd.x) / 2, y: lb.y };
+	drawPath(ctx, routingStart, routingControl, routingEnd, "rgba(0, 0, 0, 0.24)");
+	drawArrow(ctx, quadraticPoint(routingStart, routingControl, routingEnd, 0.97), 0, "rgba(0, 0, 0, 0.35)");
 
-		const start = { x: queueX + 36, y: service.y };
+	servicePoints.forEach((service) => {
+		const start = { x: queueX + 52, y: lb.y };
 		const end = { x: service.x - 52, y: service.y };
 		drawPath(ctx, start, { x: (start.x + end.x) / 2, y: service.y }, end, "rgba(0, 0, 0, 0.24)");
 		drawArrow(ctx, { x: end.x - 2, y: end.y }, 0, "rgba(0, 0, 0, 0.35)");
@@ -170,30 +170,26 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 		drawNode(ctx, client, "Client " + (index + 1), detail, false, ink, bg, accent);
 	});
 
+	ctx.save();
+	ctx.fillStyle = queuedJobs.length > 0 ? "rgba(180, 75, 49, 0.12)" : bg;
+	ctx.strokeStyle = ink;
+	ctx.lineWidth = 2;
+	ctx.beginPath();
+	ctx.roundRect(queueX - 52, lb.y - 52, 104, 104, 8);
+	ctx.fill();
+	ctx.stroke();
+	ctx.restore();
+	ctx.fillStyle = ink;
+	ctx.font = "700 9px system-ui, sans-serif";
+	ctx.fillText("QUEUE " + queuedJobs.length + "/" + SHARED_QUEUE_LIMIT, queueX - 43, lb.y - 32);
+	for (let slot = 0; slot < SHARED_QUEUE_LIMIT; slot += 1) {
+		const point = queuePoint(slot);
+		ctx.fillStyle = slot < queuedJobs.length ? accent : "rgba(0, 0, 0, 0.08)";
+		ctx.fillRect(point.x - 6, point.y - 6, 12, 12);
+	}
+
 	servicePoints.forEach((service, index) => {
-		const queuedJobs = jobsForWorker(index, "queue");
 		const busy = state.jobs.some((job) => (job.stage === "service" || job.stage === "serviceDispatch") && job.service === index);
-
-		ctx.save();
-		ctx.fillStyle = queuedJobs.length > 0 ? "rgba(180, 75, 49, 0.12)" : bg;
-		ctx.strokeStyle = ink;
-		ctx.lineWidth = 1.5;
-		ctx.setLineDash([4, 3]);
-		ctx.beginPath();
-		ctx.roundRect(queueX - 36, service.y - 29, 72, 58, 6);
-		ctx.fill();
-		ctx.stroke();
-		ctx.restore();
-		ctx.setLineDash([]);
-		ctx.fillStyle = ink;
-		ctx.font = "700 9px system-ui, sans-serif";
-		ctx.fillText("q" + (index + 1) + " " + queuedJobs.length + "/" + QUEUE_LIMIT_PER_WORKER, queueX - 29, service.y - 13);
-
-		for (let slot = 0; slot < QUEUE_LIMIT_PER_WORKER; slot += 1) {
-			const point = queuePoint(index, slot);
-			ctx.fillStyle = slot < queuedJobs.length ? accent : "rgba(0, 0, 0, 0.08)";
-			ctx.fillRect(point.x - 6, point.y - 6, 12, 12);
-		}
 
 		const serviceJob = state.jobs.find((job) => job.stage === "service" && job.service === index);
 		const dispatching = state.jobs.some((job) => job.stage === "serviceDispatch" && job.service === index);
@@ -232,27 +228,27 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 			drawJob(ctx, quadraticPoint(start, control, end, progress), job.id, accent, ink);
 		}
 
-		if (job.stage === "routing" && job.service !== undefined && servicePoints[job.service]) {
+		if (job.stage === "routing") {
 			const start = { x: lb.x + 30, y: lb.y };
-			const end = { x: queueX - 36, y: servicePoints[job.service].y };
-			const control = { x: width * 0.66, y: start.y + (end.y - start.y) * 0.35 };
+			const end = { x: queueX - 52, y: lb.y };
+			const control = { x: (start.x + end.x) / 2, y: lb.y };
 			const progress = Math.min(1, Math.max(0, 1 - Math.max(0, job.remainingMs - elapsedMs) / ROUTING_MS));
 			drawJob(ctx, quadraticPoint(start, control, end, progress), job.id, accent, ink);
 		}
 
-		if (job.stage === "queue" && job.service !== undefined) {
-			const queuedJobs = jobsForWorker(job.service, "queue");
+		if (job.stage === "queue") {
 			const index = queuedJobs.findIndex((candidate) => candidate.id === job.id);
 			if (index >= 0) {
-				drawJob(ctx, queuePoint(job.service, index), job.id, accent, ink);
+				drawJob(ctx, queuePoint(index), job.id, accent, ink);
 			}
 		}
 
 		if (job.stage === "serviceDispatch" && job.service !== undefined && servicePoints[job.service]) {
-			const start = { x: queueX + 36, y: servicePoints[job.service].y };
+			const start = queuePoint(job.queueSlot ?? 0);
 			const end = { x: serviceX - 52, y: servicePoints[job.service].y };
+			const control = { x: (start.x + end.x) / 2, y: start.y + (end.y - start.y) * 0.35 };
 			const progress = Math.min(1, Math.max(0, 1 - Math.max(0, job.remainingMs - elapsedMs) / WORKER_TRAVEL_MS));
-			drawJob(ctx, { x: start.x + (end.x - start.x) * progress, y: start.y }, job.id, accent, ink);
+			drawJob(ctx, quadraticPoint(start, control, end, progress), job.id, accent, ink);
 		}
 	});
 }
@@ -260,6 +256,9 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 function formatTwoSignificantFigures(value: number): string {
 	if (!Number.isFinite(value) || value === 0) {
 		return "0";
+	}
+	if (Math.abs(value) < 0.1) {
+		return value.toFixed(2);
 	}
 
 	const exponent = Math.floor(Math.log10(Math.abs(value)));
@@ -450,9 +449,9 @@ export default function CongestionSimulator() {
 					role="img"
 					aria-label="Animated diagram of individual clients sending jobs through a load balancer and FIFO queue to individual service workers"
 				>
-					The simulator diagram shows jobs travelling from clients through random load-balancer routes into per-worker queues and services.
+					The simulator diagram shows jobs travelling from clients through a load balancer into a shared queue and then to individual service workers.
 				</canvas>
-				<p className={styles.SceneNote}>The load balancer picks a worker at random. Jobs wait in that worker&apos;s FIFO queue before travelling into the service.</p>
+				<p className={styles.SceneNote}>Jobs wait in one bounded FIFO queue. A randomly chosen available worker takes the oldest job and travels it into the service.</p>
 			</div>
 
 			<div className={styles.Metrics} aria-live="polite">

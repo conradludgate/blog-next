@@ -15,9 +15,9 @@ This post will work towards an answer by making the system interactive. Start wi
 
 ## What this first experiment shows
 
-The service has four workers, each with its own small FIFO queue with room for four requests. Each worker usually takes about a second, but its performance fluctuates a little from one moment to the next. The load balancer randomly routes jobs to workers, and the shared network path adds latency that the client cannot see directly. Each moving dot is a job: it leaves a specific client, crosses the network, waits in that worker's queue, and is then picked up by the worker.
+The service has four workers behind one bounded FIFO queue with room for sixteen requests. Each worker usually takes about a second, but its performance fluctuates a little from one moment to the next. The load balancer sends jobs into the shared queue, and a randomly chosen available worker picks up the oldest waiting job. The shared network path adds latency that the client cannot see directly. Each moving dot is a job: it leaves a specific client, crosses the network, waits in the queue, and is then picked up by a worker.
 
-With a rate limit, every client keeps sending at the same rate even when the service slows down. Adding clients multiplies the offered rate; once one worker's finite queue fills, new jobs routed there are rejected instead of waiting forever.
+With a rate limit, every client keeps sending at the same rate even when the service slows down. Adding clients multiplies the offered rate; once the shared queue fills, new jobs are rejected instead of waiting forever.
 
 With a concurrency limit, the client keeps a fixed number of requests in flight. As observed latency rises, the client naturally sends less work. That is already a useful improvement—but it still needs a way to choose and adjust the concurrency limit.
 

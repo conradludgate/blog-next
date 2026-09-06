@@ -33,6 +33,7 @@ export interface Job {
 	remainingMs: number;
 	createdAt: number;
 	service?: number;
+	queueSlot?: number;
 }
 
 export interface SimulationState {
@@ -52,7 +53,7 @@ export interface SimulationState {
 	nowMs: number;
 }
 
-export const QUEUE_LIMIT_PER_WORKER = 4;
+export const SHARED_QUEUE_LIMIT = 16;
 export const MAX_CLIENTS = 8;
 export const MAX_WORKERS = 8;
 export const TICK_MS = 250;
@@ -269,7 +270,7 @@ export function setWorkerCount(current: SimulationState, count: number): Simulat
 		: current.workerPerformance.slice(0, workers);
 	const jobs = current.jobs.map((job) => (
 		job.service !== undefined && job.service >= workers
-			? { ...job, stage: "network" as const, service: undefined, remainingMs: current.networkMs }
+			? { ...job, stage: "network" as const, service: undefined, queueSlot: undefined, remainingMs: current.networkMs }
 			: job
 	));
 
@@ -290,7 +291,7 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 			}
 
 			if (job.stage === "network" && remainingMs <= 0) {
-				return { ...job, stage: "routing", service: randomWorker(current.workers), remainingMs: ROUTING_MS };
+				return { ...job, stage: "routing", service: undefined, remainingMs: ROUTING_MS };
 			}
 
 			if (job.stage === "routing" && remainingMs <= 0) {
@@ -307,13 +308,7 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 
 	let jobs = [...progressedJobs];
 	const waitingJobs = jobs.filter((job) => job.stage === "queue");
-	const rejectedJobs = waitingJobs.filter((job) => {
-		if (job.service === undefined) {
-			return true;
-		}
-
-		return waitingJobs.filter((candidate) => candidate.service === job.service).findIndex((candidate) => candidate.id === job.id) >= QUEUE_LIMIT_PER_WORKER;
-	});
+	const rejectedJobs = waitingJobs.slice(SHARED_QUEUE_LIMIT);
 	for (const job of rejectedJobs) {
 		completedSamples.push({ client: job.client, rttMs: nowMs - job.createdAt, dropped: true });
 	}
@@ -325,18 +320,25 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 			.filter((job) => (job.stage === "service" || job.stage === "serviceDispatch") && job.service !== undefined)
 			.map((job) => job.service),
 	);
-	for (let worker = 0; worker < current.workers; worker += 1) {
-		if (occupiedWorkers.has(worker)) {
-			continue;
-		}
-
-		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue" && job.service === worker);
+	const availableWorkers = Array.from({ length: current.workers }, (_, worker) => worker)
+		.filter((worker) => !occupiedWorkers.has(worker));
+	let dispatchedJobs = 0;
+	while (availableWorkers.length > 0) {
+		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue");
 		if (nextJobIndex === -1) {
-			continue;
+			break;
 		}
 
-		jobs[nextJobIndex] = { ...jobs[nextJobIndex], stage: "serviceDispatch", remainingMs: WORKER_TRAVEL_MS };
-		occupiedWorkers.add(worker);
+		const workerPosition = randomWorker(availableWorkers.length);
+		const [worker] = availableWorkers.splice(workerPosition, 1);
+		jobs[nextJobIndex] = {
+			...jobs[nextJobIndex],
+			stage: "serviceDispatch",
+			service: worker,
+			queueSlot: dispatchedJobs,
+			remainingMs: WORKER_TRAVEL_MS,
+		};
+		dispatchedJobs += 1;
 	}
 
 	const sentByClient = current.clients.map(() => 0);

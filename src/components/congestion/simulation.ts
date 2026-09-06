@@ -22,6 +22,8 @@ export interface ClientMetrics {
 	sentRate: number;
 	latencyMs: number;
 	rejectionRate: number;
+	sentInWindow: number;
+	sentWindowMs: number;
 }
 
 export interface Job {
@@ -60,6 +62,7 @@ export const RATE_PER_CLIENT = 0.5;
 export const FIXED_CONCURRENCY_PER_CLIENT = 4;
 export const MAX_CONTROLLER_LIMIT = 16;
 export const METRIC_EWMA_ALPHA = 0.2;
+export const METRIC_SAMPLE_WINDOW_MS = 2000;
 
 function createController(kind: ControllerKind): ControllerState {
 	return {
@@ -81,6 +84,8 @@ function createClient(kind: ControllerKind): ClientState {
 			sentRate: 0,
 			latencyMs: 1900,
 			rejectionRate: 0,
+			sentInWindow: 0,
+			sentWindowMs: 0,
 		},
 	};
 }
@@ -205,6 +210,9 @@ function updateClients(
 			: client.metrics.latencyMs;
 		const requestCount = clientSamples.length;
 		const rejectionRate = requestCount > 0 ? droppedCount / requestCount : 0;
+		const sentInWindow = client.metrics.sentInWindow + sentByClient[index];
+		const sentWindowMs = client.metrics.sentWindowMs + TICK_MS;
+		const hasRateSample = sentWindowMs >= METRIC_SAMPLE_WINDOW_MS;
 		const controller = clientSamples.reduce(
 			(current, sample) => updateController(current, sample.rttMs, sample.dropped),
 			client.controller,
@@ -214,9 +222,13 @@ function updateClients(
 			...client,
 			controller,
 			metrics: {
-				sentRate: ewma(client.metrics.sentRate, sentByClient[index] * (1000 / TICK_MS)),
+				sentRate: hasRateSample
+					? ewma(client.metrics.sentRate, sentInWindow * (1000 / sentWindowMs))
+					: client.metrics.sentRate,
 				latencyMs: successfulSamples.length > 0 ? ewma(client.metrics.latencyMs, averageRtt) : client.metrics.latencyMs,
 				rejectionRate: ewma(client.metrics.rejectionRate, rejectionRate),
+				sentInWindow: hasRateSample ? 0 : sentInWindow,
+				sentWindowMs: hasRateSample ? 0 : sentWindowMs,
 			},
 		};
 	});

@@ -55,10 +55,15 @@ export default function CongestionSimulator() {
 	const [isRunning, setIsRunning] = useState(true);
 	const [state, setState] = useState<SimulationState>(() => createInitialState());
 	const metrics = useMemo(() => ({
-		averageLimit: state.clients.reduce((total, client) => total + client.controller.limit, 0) / state.clients.length,
 		rejectionRate: state.clients.reduce((total, client) => total + client.metrics.rejectionRate, 0) / state.clients.length,
 		capacity: serviceCapacity(state),
 	}), [state]);
+	const isRejecting = metrics.rejectionRate > 0.005;
+	const status = isRejecting
+		? "Rejecting work"
+		: state.queueDepth > 0
+			? `${state.queueDepth} waiting`
+			: "Queue empty";
 
 	useEffect(() => {
 		if (!isRunning) {
@@ -92,7 +97,7 @@ export default function CongestionSimulator() {
 		<section className={styles.Simulator} aria-labelledby="congestion-simulator-title">
 			<div className={styles.Header}>
 				<div>
-					<p className={styles.Eyebrow}>First experiment</p>
+					<p className={styles.Eyebrow}>Interactive experiment</p>
 					<h2 id="congestion-simulator-title">A fixed limit meets a changing system</h2>
 				</div>
 				<div className={styles.HeaderControls}>
@@ -105,75 +110,94 @@ export default function CongestionSimulator() {
 					>
 						{isRunning ? "Pause" : "Play"}
 					</button>
-					<span className={state.queueDepth > 0 ? styles.Warning : styles.Healthy}>
-						{state.queueDepth > 0 ? "Queueing" : "Healthy"}
+					<span className={state.queueDepth > 0 || isRejecting ? styles.Warning : styles.Healthy}>
+						{status}
 					</span>
 				</div>
 			</div>
 
-			<div className={styles.ModeSwitcher} role="group" aria-label="Choose a controller">
-				{CONTROLLER_OPTIONS.map((option) => (
-					<button
-						type="button"
-						className={state.strategy === option.kind ? styles.Selected : ""}
-						aria-pressed={state.strategy === option.kind}
-						onClick={() => changeStrategy(option.kind)}
-						key={option.kind}
-					>
-						{option.label}
+			<div className={styles.Challenge}>
+				<div>
+					<span className={styles.ChallengeLabel}>Try it</span>
+					<p>Add clients until work starts waiting. Then add a worker and watch the queue drain.</p>
+				</div>
+				<div className={styles.ChallengeActions}>
+					<button type="button" disabled={state.clients.length === MAX_CLIENTS} onClick={() => changeClients(1)}>
+						Add a client <span aria-hidden="true">→</span>
 					</button>
-				))}
+					<button type="button" disabled={state.workers === MAX_WORKERS} onClick={() => changeWorkers(1)}>
+						Add a worker <span aria-hidden="true">→</span>
+					</button>
+				</div>
 			</div>
 
-			<p className={styles.Description}>
-				{state.strategy === "rate" && `${RATE_PER_CLIENT} requests per second per client, regardless of latency.`}
-				{state.strategy === "concurrency" && `${FIXED_CONCURRENCY_PER_CLIENT} requests in flight per client, using a fixed window.`}
-				{state.strategy === "aimd" && "Additively increase the window after success; halve it when work is rejected."}
-				{state.strategy === "vegas" && "Use the extra round-trip delay to keep a small queue at the service."}
-				{state.strategy === "gradient2" && "Compare short- and long-term latency to follow the service’s changing capacity."}
+			<div className={styles.ControllerRow}>
+				<span className={styles.ControllerLabel}>Clients send using</span>
+				<div className={styles.ModeSwitcher} role="group" aria-label="Choose how clients send work">
+					{CONTROLLER_OPTIONS.map((option) => (
+						<button
+							type="button"
+							className={state.strategy === option.kind ? styles.Selected : ""}
+							aria-pressed={state.strategy === option.kind}
+							onClick={() => changeStrategy(option.kind)}
+							key={option.kind}
+						>
+							{option.label}
+						</button>
+					))}
+				</div>
+			</div>
+
+			<p className={styles.Description} aria-live="polite">
+				{state.strategy === "rate" && `${RATE_PER_CLIENT} requests per second from every client, even when the service slows down.`}
+				{state.strategy === "concurrency" && `${FIXED_CONCURRENCY_PER_CLIENT} requests in flight per client. Slower responses naturally slow new work.`}
+				{state.strategy === "aimd" && "Increase after success; halve the window only after the queue rejects work."}
+				{state.strategy === "vegas" && "Estimate queueing delay and back off before the queue reaches its limit."}
+				{state.strategy === "gradient2" && "Compare short- and long-term latency, following changes in service capacity."}
 			</p>
 
 			<div className={styles.SceneFrame}>
 				<div className={styles.SceneControls}>
-					<div>
-						<span className={styles.ColumnLabel}>Clients</span>
-						<span className={styles.ColumnDetail}>{state.clients.length} active {state.clients.length === 1 ? "client" : "clients"}</span>
-					</div>
-					<div className={styles.SceneControlGroup}>
-						<span className={styles.ColumnLabel}>Service</span>
-						<span className={styles.ColumnDetail}>{state.workers} workers · {metrics.capacity}/s capacity</span>
-					</div>
 					<div className={styles.ControlSets}>
 						<div className={styles.ControlSet}>
-							<span className={styles.ControlLabel}>clients</span>
+							<span className={styles.ControlLabel}>Clients <strong>{state.clients.length}</strong></span>
 							<div className={styles.Stepper}>
 								<button type="button" aria-label="Remove client" disabled={state.clients.length === 1} onClick={() => changeClients(-1)}>−</button>
 								<button type="button" aria-label="Add client" disabled={state.clients.length === MAX_CLIENTS} onClick={() => changeClients(1)}>+</button>
 							</div>
 						</div>
 						<div className={styles.ControlSet}>
-							<span className={styles.ControlLabel}>workers</span>
+							<span className={styles.ControlLabel}>Workers <strong>{state.workers}</strong></span>
 							<div className={styles.Stepper}>
 								<button type="button" aria-label="Remove worker" disabled={state.workers === 1} onClick={() => changeWorkers(-1)}>−</button>
 								<button type="button" aria-label="Add worker" disabled={state.workers === MAX_WORKERS} onClick={() => changeWorkers(1)}>+</button>
 							</div>
 						</div>
 					</div>
+					<div className={styles.CapacitySummary}>
+						<span>Estimated capacity</span>
+						<strong>{metrics.capacity} jobs/s</strong>
+					</div>
 				</div>
 				<PixiCongestionScene state={state} />
-				<p className={styles.SceneNote}>Jobs wait in one bounded FIFO queue. A randomly chosen available worker takes the oldest job and travels it into the service.</p>
+				<p className={styles.ScreenReaderSummary}>There are {state.clients.length} clients, {state.workers} workers, and {state.queueDepth} jobs waiting. {state.dropped} jobs have been rejected.</p>
+				<div className={styles.QueueMeter}>
+					<span>Shared FIFO queue</span>
+					<div className={styles.QueueTrack} aria-hidden="true"><i style={{ width: `${state.queueDepth / 16 * 100}%` }} /></div>
+					<strong>{state.queueDepth} / 16</strong>
+				</div>
 			</div>
 
-			<div className={styles.Metrics} aria-live="polite">
-				<div><span>Sent rate</span><strong>{formatMetricValue(state.sentRate)}/s</strong></div>
-				<div><span>Client limit</span><strong>{state.strategy === "rate" ? `${formatMetricValue(RATE_PER_CLIENT)}/s` : formatMetricValue(metrics.averageLimit)}</strong></div>
-				<div><span>Observed latency</span><strong>{formatLatency(state.latencyMs)}</strong></div>
-				<div><span>Reject rate</span><strong>{formatMetricValue(metrics.rejectionRate * 100)}%</strong></div>
+			<div className={styles.Metrics}>
+				<div><span><b>Rate</b> Offered load</span><strong>{formatMetricValue(state.sentRate)}/s</strong></div>
+				<div className={isRejecting ? styles.MetricWarning : ""}><span><b>Errors</b> Rejected</span><strong>{formatMetricValue(metrics.rejectionRate * 100)}%</strong></div>
+				<div className={state.latencyMs > 4000 ? styles.MetricWarning : ""}><span><b>Duration</b> Round trip</span><strong>{formatLatency(state.latencyMs)}</strong></div>
+				<div className={state.queueDepth > 0 ? styles.MetricWarning : ""}><span><b>Saturation</b> Waiting</span><strong>{state.queueDepth}</strong></div>
 			</div>
 
 			<div className={styles.Footer}>
-				<p>The clock runs by itself. Add or remove clients and workers to create pressure, then watch the shared queue respond.</p>
-				<button type="button" className={styles.Reset} onClick={reset}>Reset</button>
+				<p>Each dot is one request. The queue is bounded, so excess work is rejected instead of waiting forever.</p>
+				<button type="button" className={styles.Reset} onClick={reset}>Start over</button>
 			</div>
 		</section>
 	);

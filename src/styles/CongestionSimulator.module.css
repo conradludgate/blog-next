@@ -1,61 +1,47 @@
 .Simulator {
-	--sim-border: color-mix(in srgb, var(--color-fg) 28%, transparent);
+	--sim-border: color-mix(in srgb, var(--color-fg) 24%, transparent);
+	--sim-faint: color-mix(in srgb, var(--color-fg) 7%, var(--color-bg));
 	--sim-muted: color-mix(in srgb, var(--color-fg) 68%, transparent);
 	--sim-accent: #b44b31;
-	--sim-accent-soft: color-mix(in srgb, var(--sim-accent) 14%, var(--color-bg));
-	margin: 2.5rem 0;
-	padding: 1.15rem 0.25rem 0.9rem;
-	border-top: 2px solid var(--color-fg);
-	border-bottom: 2px solid var(--color-fg);
-	background: var(--color-bg);
+	--sim-accent-soft: color-mix(in srgb, var(--sim-accent) 10%, var(--color-bg));
+	margin: 2.75rem 0;
+	color: var(--color-fg);
 }
 
-.Header,
-.SceneControls,
-.Footer {
+.Header, .SceneControls, .Footer, .ControllerRow, .Challenge, .QueueMeter {
 	display: flex;
-	align-items: flex-start;
+	align-items: center;
 	justify-content: space-between;
 	gap: 1rem;
 }
 
-.Eyebrow,
-.ColumnLabel {
+.Eyebrow {
 	margin: 0;
 	color: var(--sim-accent);
-	font-size: 0.72rem;
-	font-weight: 700;
-	letter-spacing: 0.07em;
+	font-size: 0.75rem;
+	font-weight: 750;
+	letter-spacing: 0.08em;
 	text-transform: uppercase;
 }
 
 .Header h2 {
 	margin: 0.15rem 0 0;
-	font-size: 1.3rem;
+	font-size: clamp(1.35rem, 3vw, 1.75rem);
+	line-height: 1.2;
 }
 
-.HeaderControls {
-	display: flex;
-	align-items: center;
-	gap: 0.7rem;
-}
+.HeaderControls { display: flex; align-items: center; gap: 0.75rem; flex: 0 0 auto; }
+.Clock { color: var(--sim-muted); font-size: 0.875rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.Clock {
-	color: var(--sim-muted);
-	font-variant-numeric: tabular-nums;
+.Healthy, .Warning {
+	position: relative;
+	padding-left: 0.85rem;
+	font-size: 0.8125rem;
+	font-weight: 700;
 	white-space: nowrap;
 }
 
-.Healthy,
-.Warning {
-	position: relative;
-	padding-left: 0.9rem;
-	font-size: 0.75rem;
-	font-weight: 700;
-}
-
-.Healthy::before,
-.Warning::before {
+.Healthy::before, .Warning::before {
 	position: absolute;
 	top: 50%;
 	left: 0;
@@ -66,227 +52,145 @@
 	transform: translateY(-50%);
 }
 
-.Healthy {
-	color: #17613b;
-}
+.Healthy { color: #167047; }
+.Healthy::before { background: #167047; }
+.Warning { color: var(--sim-accent); }
+.Warning::before { background: var(--sim-accent); }
 
-.Healthy::before {
-	background: #17613b;
-}
-
-.Warning {
-	color: var(--sim-accent);
-}
-
-.Warning::before {
-	background: var(--sim-accent);
-}
-
-.Play,
-.ModeSwitcher button,
-.Stepper button,
-.Reset {
-	padding: 0.35rem 0.55rem;
+.Play, .ModeSwitcher button, .Stepper button, .Reset, .ChallengeActions button {
+	min-height: 2.25rem;
+	padding: 0.4rem 0.7rem;
 	border: 1px solid var(--sim-border);
-	border-radius: 0.25rem;
-	background: transparent;
+	border-radius: 0.35rem;
+	background: var(--color-bg);
 	color: var(--color-fg);
 	font: inherit;
+	font-size: 0.875rem;
 	cursor: pointer;
+	touch-action: manipulation;
 }
 
-.Play:hover,
-.ModeSwitcher button:hover,
-.Stepper button:hover,
-.Reset:hover {
+.Play:hover, .ModeSwitcher button:hover, .Stepper button:hover, .Reset:hover, .ChallengeActions button:hover {
 	border-color: var(--sim-accent);
 	color: var(--sim-accent);
 }
 
-.Play:disabled,
-.Stepper button:disabled {
-	opacity: 0.35;
-	cursor: not-allowed;
+.Play:focus-visible, .ModeSwitcher button:focus-visible, .Stepper button:focus-visible, .Reset:focus-visible, .ChallengeActions button:focus-visible {
+	outline: 3px solid color-mix(in srgb, var(--sim-accent) 34%, transparent);
+	outline-offset: 2px;
 }
+
+.Stepper button:disabled, .ChallengeActions button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.Challenge {
+	align-items: flex-start;
+	margin-top: 1.25rem;
+	padding: 1rem 1.1rem;
+	border-left: 4px solid var(--sim-accent);
+	background: var(--sim-accent-soft);
+}
+
+.ChallengeLabel { color: var(--sim-accent); font-size: 0.75rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+.Challenge p { max-width: 34rem; margin: 0.2rem 0 0; font-size: 0.9375rem; line-height: 1.45; }
+.ChallengeActions { display: flex; gap: 0.5rem; flex: 0 0 auto; }
+.ChallengeActions button:first-child { border-color: var(--sim-accent); background: var(--sim-accent); color: #fff; }
+.ChallengeActions button:first-child:hover { background: color-mix(in srgb, var(--sim-accent) 88%, #000); color: #fff; }
+
+.ControllerRow { align-items: baseline; margin-top: 1.15rem; }
+.ControllerLabel, .ControlLabel, .CapacitySummary span { color: var(--sim-muted); font-size: 0.8125rem; }
+.ControllerLabel { flex: 0 0 auto; }
 
 .ModeSwitcher {
 	display: flex;
-	flex-wrap: wrap;
-	gap: 0.4rem 1rem;
-	margin-top: 1.1rem;
-	border-bottom: 1px solid var(--sim-border);
+	gap: 0.25rem;
+	padding: 0.2rem;
+	border: 1px solid var(--sim-border);
+	border-radius: 0.45rem;
+	background: var(--sim-faint);
 }
 
-.ModeSwitcher button {
-	padding: 0.2rem 0 0.5rem;
-	border: 0;
-	border-bottom: 3px solid transparent;
-	border-radius: 0;
-}
-
-.ModeSwitcher .Selected {
-	border-bottom-color: var(--sim-accent);
-	color: var(--sim-accent);
-}
-
-.Description {
-	margin: 0.65rem 0 0;
-	color: var(--sim-muted);
-	font-size: 0.9rem;
-}
+.ModeSwitcher button { min-height: 2rem; padding: 0.3rem 0.65rem; border-color: transparent; background: transparent; }
+.ModeSwitcher .Selected { border-color: var(--sim-border); background: var(--color-bg); box-shadow: 0 1px 2px color-mix(in srgb, var(--color-fg) 12%, transparent); color: var(--sim-accent); }
+.Description { min-height: 1.4em; margin: 0.55rem 0 0; color: var(--sim-muted); font-size: 0.875rem; }
 
 .SceneFrame {
-	margin-top: 1.25rem;
+	overflow: hidden;
+	margin-top: 1rem;
 	border: 2px solid var(--color-fg);
-	border-radius: 0.55rem;
+	border-radius: 0.65rem;
 	background: var(--color-bg);
-	box-shadow: 4px 4px 0 var(--sim-accent);
+	box-shadow: 5px 5px 0 var(--sim-accent);
 }
 
-.SceneControls {
-	align-items: center;
-	padding: 0.75rem;
-	border-bottom: 1px solid var(--sim-border);
-}
-
-.SceneControlGroup {
-	margin-left: auto;
-}
-
-.ColumnDetail,
-.SceneNote,
-.Footer p {
-	display: block;
-	color: var(--sim-muted);
-	font-size: 0.78rem;
-}
-
-.ColumnDetail {
-	margin-top: 0.15rem;
-}
-
-.Stepper {
-	display: flex;
-	gap: 0.2rem;
-}
-
-.ControlSets {
-	display: flex;
-	gap: 0.8rem;
-}
-
-.ControlSet {
-	display: flex;
-	align-items: center;
-	gap: 0.35rem;
-}
-
-.ControlLabel {
-	color: var(--sim-muted);
-	font-size: 0.72rem;
-	text-transform: uppercase;
-}
-
-.Stepper button {
-	width: 1.5rem;
-	height: 1.5rem;
-	padding: 0;
-	line-height: 1;
-}
+.SceneControls { padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--sim-border); background: var(--sim-faint); }
+.ControlSets { display: flex; gap: 0.65rem; }
+.ControlSet { display: flex; align-items: center; gap: 0.55rem; padding-left: 0.65rem; border-left: 1px solid var(--sim-border); }
+.ControlSet:first-child { padding-left: 0; border-left: 0; }
+.ControlLabel strong { color: var(--color-fg); font-variant-numeric: tabular-nums; }
+.Stepper { display: flex; gap: 0.2rem; }
+.Stepper button { width: 2rem; min-height: 2rem; padding: 0; font-size: 1.1rem; line-height: 1; }
+.CapacitySummary { display: flex; align-items: baseline; gap: 0.45rem; }
+.CapacitySummary strong { font-size: 0.875rem; font-variant-numeric: tabular-nums; }
 
 .SceneCanvas {
 	display: block;
 	width: 100%;
-	height: 32rem;
+	height: clamp(27rem, 58vw, 32rem);
 	color: var(--color-fg);
 	background: var(--color-bg);
 }
 
-.SceneNote {
-	margin: 0;
-	padding: 0.65rem 0.75rem 0.75rem;
-	border-top: 1px solid var(--sim-border);
+.QueueMeter { padding: 0.7rem 0.75rem; border-top: 1px solid var(--sim-border); background: var(--sim-faint); font-size: 0.8125rem; }
+.QueueMeter > span { color: var(--sim-muted); }
+.QueueMeter > strong { min-width: 3.5rem; text-align: right; font-variant-numeric: tabular-nums; }
+.QueueTrack { flex: 1 1 auto; overflow: hidden; height: 0.45rem; border-radius: 99px; background: color-mix(in srgb, var(--color-fg) 10%, transparent); }
+.QueueTrack i { display: block; height: 100%; border-radius: inherit; background: var(--sim-accent); transition: width 180ms ease; }
+
+.Metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 1.25rem; border-block: 1px solid var(--sim-border); }
+.Metrics > div { display: flex; min-width: 0; flex-direction: column; gap: 0.2rem; padding: 0.8rem; border-left: 1px solid var(--sim-border); }
+.Metrics > div:first-child { border-left: 0; }
+.Metrics span { overflow: hidden; color: var(--sim-muted); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
+.Metrics span b { color: var(--color-fg); font-weight: 700; }
+.Metrics strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.Metrics .MetricWarning strong { color: var(--sim-accent); }
+
+.Footer { align-items: flex-start; margin-top: 0.75rem; }
+.Footer p { max-width: 38rem; margin: 0; color: var(--sim-muted); font-size: 0.8125rem; line-height: 1.45; }
+.Reset { flex: 0 0 auto; color: var(--sim-muted); }
+
+.ScreenReaderSummary {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
 }
 
-.Metrics {
-	display: grid;
-	grid-template-columns: repeat(4, 1fr);
-	gap: 0.75rem;
-	margin-top: 1.2rem;
-	border-top: 1px solid var(--sim-border);
+@media only screen and (max-width: 760px) {
+	.Header, .Challenge { align-items: stretch; flex-direction: column; }
+	.HeaderControls { justify-content: space-between; }
+	.ChallengeActions button { flex: 1; }
+	.ControllerRow { align-items: stretch; flex-direction: column; gap: 0.45rem; }
+	.ModeSwitcher { overflow-x: auto; justify-content: flex-start; padding-bottom: 0.3rem; }
+	.ModeSwitcher button { flex: 0 0 auto; }
+	.SceneControls { align-items: flex-start; flex-direction: column; }
+	.CapacitySummary { width: 100%; justify-content: space-between; }
+	.Metrics { grid-template-columns: repeat(2, 1fr); }
+	.Metrics > div:nth-child(3) { border-left: 0; border-top: 1px solid var(--sim-border); }
+	.Metrics > div:nth-child(4) { border-top: 1px solid var(--sim-border); }
+	.Footer { flex-direction: column; }
 }
 
-.Metrics > div {
-	display: flex;
-	justify-content: space-between;
-	align-items: baseline;
-	gap: 0.5rem;
-	padding: 0.6rem 0;
-	border-bottom: 1px solid var(--sim-border);
+@media only screen and (max-width: 460px) {
+	.ChallengeActions { flex-direction: column; }
+	.ControlSets { width: 100%; justify-content: space-between; }
+	.ControlSet { border-left: 0; padding-left: 0; }
+	.SceneCanvas { height: 34rem; }
+	.QueueMeter > span { display: none; }
 }
 
-.Metrics span {
-	color: var(--sim-muted);
-	font-size: 0.78rem;
-}
-
-.Metrics strong {
-	font-variant-numeric: tabular-nums;
-}
-
-.Footer {
-	align-items: center;
-	margin-top: 0.75rem;
-}
-
-.Footer p {
-	margin: 0;
-}
-
-.Reset {
-	flex: 0 0 auto;
-	color: var(--sim-muted);
-}
-
-@media only screen and (max-width: 700px) {
-	.Header {
-		flex-direction: column;
-	}
-
-	.HeaderControls {
-		width: 100%;
-		justify-content: space-between;
-	}
-
-	.SceneControls {
-		flex-wrap: wrap;
-	}
-
-	.SceneControlGroup {
-		margin-left: 0;
-	}
-
-	.ControlSets {
-		width: 100%;
-		justify-content: flex-end;
-	}
-
-	.SceneCanvas {
-		height: 38rem;
-	}
-
-	.Metrics {
-		grid-template-columns: repeat(2, 1fr);
-	}
-
-	.Footer {
-		align-items: flex-start;
-		flex-direction: column;
-	}
-}
-
-@media only screen and (max-width: 430px) {
-	.Metrics {
-		grid-template-columns: 1fr;
-	}
-}
+@media (prefers-reduced-motion: reduce) { .QueueTrack i { transition: none; } }

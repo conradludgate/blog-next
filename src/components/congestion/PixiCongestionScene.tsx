@@ -166,7 +166,7 @@ class PixiScene {
 		const computed = getComputedStyle(this.app.canvas);
 		const ink = computed.color || "#1d1d1d";
 		const bg = computed.backgroundColor || "transparent";
-		const muted = "rgba(0, 0, 0, 0.58)";
+		const muted = computed.getPropertyValue("--sim-muted").trim() || ink;
 
 		this.addPath({ x: layout.clientX + 52, y: layout.clients[0]?.y ?? layout.lb.y }, layout.lb, layout.width * 0.28, ink);
 		this.addPath({ x: layout.lb.x + 30, y: layout.lb.y }, { x: layout.queueX - 52, y: layout.lb.y }, (layout.lb.x + layout.queueX) / 2, ink);
@@ -192,7 +192,7 @@ class PixiScene {
 		this.staticLayer.addChild(this.queueLabel);
 		for (let index = 0; index < SHARED_QUEUE_LIMIT; index += 1) {
 			const point = this.queuePoint(index);
-			const slot = new Graphics().rect(point.x - 6, point.y - 6, 12, 12).fill("rgba(0, 0, 0, 0.08)");
+			const slot = new Graphics().rect(point.x - 6, point.y - 6, 12, 12).fill({ color: ink, alpha: 0.08 });
 			this.queueSlots.push(slot);
 			this.staticLayer.addChild(slot);
 		}
@@ -241,7 +241,7 @@ class PixiScene {
 		});
 		this.queueLabel!.text = `QUEUE ${this.state.jobs.filter((job) => job.stage === "queue").length}/${SHARED_QUEUE_LIMIT}`;
 		const queueDepth = this.state.jobs.filter((job) => job.stage === "queue").length;
-		this.queueSlots.forEach((slot, index) => slot.clear().rect(this.queuePoint(index).x - 6, this.queuePoint(index).y - 6, 12, 12).fill(index < queueDepth ? ACCENT : "rgba(0, 0, 0, 0.08)"));
+		this.queueSlots.forEach((slot, index) => slot.clear().rect(this.queuePoint(index).x - 6, this.queuePoint(index).y - 6, 12, 12).fill(index < queueDepth ? ACCENT : { color: ink, alpha: 0.08 }));
 	}
 
 	private queuePoint(index: number): Point {

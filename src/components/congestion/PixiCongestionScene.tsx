@@ -61,6 +61,10 @@ function makeText(text: string, fontSize: number, fill: string, weight: "400" | 
 	});
 }
 
+function formatLimit(limit: number): string {
+	return Number.isFinite(limit) ? Number(limit.toPrecision(2)).toString() : "0";
+}
+
 class PixiScene {
 	private readonly app: Application;
 	private readonly staticLayer = new Container();
@@ -227,7 +231,7 @@ class PixiScene {
 		const ink = computed.color || "#1d1d1d";
 		const bg = computed.backgroundColor || "transparent";
 		this.clientViews.forEach((view, index) => {
-			view.detail.text = this.state.strategy === "rate" ? "0.5/s source" : `${Math.floor(this.state.clients[index].controller.limit)} in flight`;
+			view.detail.text = this.state.strategy === "rate" ? "0.5/s source" : `${formatLimit(this.state.clients[index].controller.limit)} in flight`;
 			view.body.clear().roundRect(-NODE_WIDTH / 2, -NODE_HEIGHT / 2, NODE_WIDTH, NODE_HEIGHT, 8).fill(bg).stroke({ color: ink, width: 2 });
 		});
 		this.workerViews.forEach((view, index) => {

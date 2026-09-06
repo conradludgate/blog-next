@@ -11,6 +11,9 @@ export interface ControllerState {
 	sampleCount: number;
 	rttSum: number;
 	warmupSamples: number;
+	gradient2TrendSamples: number;
+	gradient2BackoffCooldown: number;
+	gradient2BackoffLatched: boolean;
 }
 
 export interface ClientState {
@@ -76,9 +79,14 @@ export const GRADIENT2_SAMPLE_SIZE = 1;
 export const GRADIENT2_SHORT_ALPHA = 0.35;
 export const GRADIENT2_LONG_ALPHA = 0.08;
 export const GRADIENT2_RISING_THRESHOLD = 1.05;
+export const GRADIENT2_STABLE_THRESHOLD = 1.02;
+export const GRADIENT2_TREND_SAMPLES = 3;
 export const GRADIENT2_PROBE_STEP = 1;
-export const GRADIENT2_LIMIT_ALPHA = 0.5;
-export const GRADIENT2_BACKOFF_FACTOR = 0.7;
+export const GRADIENT2_LIMIT_ALPHA = 0.35;
+export const GRADIENT2_BACKOFF_FACTOR = 0.8;
+export const GRADIENT2_BACKOFF_COOLDOWN = 8;
+export const GRADIENT2_PROBE_DELAY_RATIO = 1.15;
+export const GRADIENT2_MAX_LIMIT = 12;
 export const GCRA_STARTUP_RATE = 1;
 export const GCRA_STARTUP_SAMPLES = 8;
 export const GCRA_MAX_RATE = 4;
@@ -95,6 +103,9 @@ function createController(kind: ControllerKind): ControllerState {
 		sampleCount: 0,
 		rttSum: 0,
 		warmupSamples: 0,
+		gradient2TrendSamples: 0,
+		gradient2BackoffCooldown: 0,
+		gradient2BackoffLatched: false,
 	};
 }
 
@@ -175,6 +186,9 @@ function updateController(controller: ControllerState, rttMs: number, dropped: b
 		return {
 			...next,
 			limit: clamp(next.limit * (controller.kind === "gradient2" ? 0.7 : 0.5), 1, MAX_CONTROLLER_LIMIT),
+			gradient2TrendSamples: 0,
+			gradient2BackoffCooldown: controller.kind === "gradient2" ? GRADIENT2_BACKOFF_COOLDOWN : 0,
+			gradient2BackoffLatched: false,
 		};
 	}
 
@@ -204,15 +218,38 @@ function updateController(controller: ControllerState, rttMs: number, dropped: b
 		return { ...next, shortRtt, longRtt };
 	}
 
+	const cooldown = Math.max(0, next.gradient2BackoffCooldown - 1);
 	const divergence = shortRtt / Math.max(longRtt, 1);
-	const backingOff = divergence >= GRADIENT2_RISING_THRESHOLD;
-	const targetLimit = backingOff ? next.limit * GRADIENT2_BACKOFF_FACTOR : next.limit + GRADIENT2_PROBE_STEP;
+	const delayIsElevated = shortRtt > next.minRtt * GRADIENT2_PROBE_DELAY_RATIO;
+	const recovered = !delayIsElevated && divergence <= GRADIENT2_STABLE_THRESHOLD;
+	const latched = recovered ? false : next.gradient2BackoffLatched;
+	// A backoff starts a new observation period. Do not keep accumulating the
+	// old trend while cooling down or while the delay episode is latched, or a
+	// sustained delay turns into a series of backoffs that eventually drives the
+	// learned limit to one.
+	const trendSamples = cooldown > 0 || latched
+		? 0
+		: divergence >= GRADIENT2_RISING_THRESHOLD
+			? next.gradient2TrendSamples + 1
+			: divergence <= GRADIENT2_STABLE_THRESHOLD
+				? Math.max(0, next.gradient2TrendSamples - 1)
+				: next.gradient2TrendSamples;
+	const backingOff = trendSamples >= GRADIENT2_TREND_SAMPLES && cooldown === 0;
+	const probing = cooldown === 0 && divergence <= GRADIENT2_STABLE_THRESHOLD && !delayIsElevated;
+	const targetLimit = backingOff
+		? next.limit * GRADIENT2_BACKOFF_FACTOR
+		: probing
+			? next.limit + GRADIENT2_PROBE_STEP
+			: next.limit;
 
 	return {
 		...next,
-		limit: clamp(ewma(next.limit, targetLimit, GRADIENT2_LIMIT_ALPHA), 1, MAX_CONTROLLER_LIMIT),
+		limit: clamp(ewma(next.limit, targetLimit, GRADIENT2_LIMIT_ALPHA), 1, GRADIENT2_MAX_LIMIT),
 		shortRtt,
 		longRtt,
+		gradient2TrendSamples: backingOff ? 0 : trendSamples,
+		gradient2BackoffCooldown: backingOff ? GRADIENT2_BACKOFF_COOLDOWN : cooldown,
+		gradient2BackoffLatched: backingOff ? true : latched,
 		sampleCount: 0,
 		rttSum: 0,
 	};

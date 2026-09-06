@@ -86,7 +86,6 @@ function advanceSimulation(current: SimulationState, mode: Mode): SimulationStat
 function getMetrics(state: SimulationState, mode: Mode) {
 	const offered = offeredRequests(state, mode);
 	const capacity = serviceCapacity(state);
-	const queueShare = Math.min(100, Math.round((state.queue / QUEUE_LIMIT) * 100));
 	let busyWorkers = 0;
 	let remaining = Math.min(offered, capacity);
 
@@ -98,7 +97,7 @@ function getMetrics(state: SimulationState, mode: Mode) {
 		busyWorkers += 1;
 	}
 
-	return { offered, capacity, queueShare, busyWorkers };
+	return { offered, capacity, busyWorkers };
 }
 
 function performanceOpacity(performance: number): number {
@@ -224,8 +223,10 @@ export default function CongestionSimulator() {
 					<span className={styles.NodeLabel}>FIFO queue</span>
 					<strong className={styles.NodeValue}>{state.queue}<small> / {QUEUE_LIMIT}</small></strong>
 					<span className={styles.NodeDetail}>{state.dropped} rejected</span>
-					<div className={styles.Track} aria-hidden="true">
-						<div className={styles.QueueFill} style={{ width: `${state.queue === 0 ? 0 : Math.max(10, metrics.queueShare)}%` }} />
+					<div className={styles.QueueSlots} aria-hidden="true">
+						{Array.from({ length: QUEUE_LIMIT }, (_, index) => (
+							<span key={index} className={index < state.queue ? styles.Queued : ""} />
+						))}
 					</div>
 				</div>
 

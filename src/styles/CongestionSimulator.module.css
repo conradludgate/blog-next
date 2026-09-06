@@ -1,13 +1,13 @@
 .Simulator {
-	--sim-border: color-mix(in srgb, var(--color-fg) 20%, transparent);
+	--sim-border: color-mix(in srgb, var(--color-fg) 28%, transparent);
 	--sim-muted: color-mix(in srgb, var(--color-fg) 68%, transparent);
 	--sim-accent: #b44b31;
 	--sim-accent-soft: color-mix(in srgb, var(--sim-accent) 14%, var(--color-bg));
 	margin: 2.5rem 0;
-	padding: 1.15rem;
-	border: 1px solid var(--sim-border);
-	border-radius: 0.65rem;
-	background: var(--color-bg-secondary);
+	padding: 1.15rem 0.25rem 0.9rem;
+	border-top: 2px solid var(--color-fg);
+	border-bottom: 2px solid var(--color-fg);
+	background: var(--color-bg);
 }
 
 .Header,
@@ -20,8 +20,7 @@
 }
 
 .Eyebrow,
-.NodeLabel,
-.ActionLabel {
+.NodeLabel {
 	margin: 0;
 	color: var(--sim-accent);
 	font-size: 0.72rem;
@@ -38,7 +37,7 @@
 .HeaderControls {
 	display: flex;
 	align-items: center;
-	gap: 0.5rem;
+	gap: 0.7rem;
 }
 
 .Clock {
@@ -49,30 +48,48 @@
 
 .Healthy,
 .Warning {
-	padding: 0.3rem 0.5rem;
-	border-radius: 999px;
+	position: relative;
+	padding-left: 0.9rem;
 	font-size: 0.75rem;
 	font-weight: 700;
 }
 
+.Healthy::before,
+.Warning::before {
+	position: absolute;
+	top: 50%;
+	left: 0;
+	width: 0.45rem;
+	height: 0.45rem;
+	border-radius: 50%;
+	content: "";
+	transform: translateY(-50%);
+}
+
 .Healthy {
 	color: #17613b;
-	background: #d8f0df;
+}
+
+.Healthy::before {
+	background: #17613b;
 }
 
 .Warning {
-	color: #8a351f;
-	background: #f5d8cc;
+	color: var(--sim-accent);
+}
+
+.Warning::before {
+	background: var(--sim-accent);
 }
 
 .Play,
 .ModeSwitcher button,
 .Stepper button,
 .Reset {
-	padding: 0.45rem 0.65rem;
+	padding: 0.35rem 0.55rem;
 	border: 1px solid var(--sim-border);
-	border-radius: 0.35rem;
-	background: var(--color-bg);
+	border-radius: 0.25rem;
+	background: transparent;
 	color: var(--color-fg);
 	font: inherit;
 	cursor: pointer;
@@ -83,6 +100,7 @@
 .Stepper button:hover,
 .Reset:hover {
 	border-color: var(--sim-accent);
+	color: var(--sim-accent);
 }
 
 .Play:disabled,
@@ -93,13 +111,20 @@
 
 .ModeSwitcher {
 	display: flex;
-	gap: 0.35rem;
-	margin-top: 1rem;
+	gap: 1rem;
+	margin-top: 1.1rem;
+	border-bottom: 1px solid var(--sim-border);
+}
+
+.ModeSwitcher button {
+	padding: 0.2rem 0 0.5rem;
+	border: 0;
+	border-bottom: 3px solid transparent;
+	border-radius: 0;
 }
 
 .ModeSwitcher .Selected {
-	border-color: var(--sim-accent);
-	background: var(--sim-accent-soft);
+	border-bottom-color: var(--sim-accent);
 	color: var(--sim-accent);
 }
 
@@ -125,19 +150,21 @@
 	gap: 0.2rem;
 	min-height: 7.6rem;
 	padding: 0.8rem;
-	border: 1px solid var(--sim-border);
-	border-radius: 0.45rem;
+	border: 2px solid var(--color-fg);
+	border-radius: 0.55rem;
 	background: var(--color-bg);
+	box-shadow: 3px 3px 0 var(--sim-accent);
 }
 
 .Queue {
 	border-style: dashed;
-	background: transparent;
+	box-shadow: none;
+	transform: rotate(-0.5deg);
 }
 
 .QueueActive {
-	border-color: var(--sim-accent);
 	background: var(--sim-accent-soft);
+	box-shadow: 3px 3px 0 var(--sim-accent);
 }
 
 .Stepper {
@@ -186,10 +213,15 @@
 	display: block;
 	width: 0.72rem;
 	height: 0.72rem;
+	border: 1.5px solid var(--sim-accent);
 	border-radius: 0.12rem;
-	background: var(--sim-accent);
-	opacity: 0.55;
+	background: var(--sim-accent-soft);
+	opacity: 0.7;
 	transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.Workers span {
+	border-radius: 50%;
 }
 
 .Clients b {
@@ -198,6 +230,7 @@
 }
 
 .BusyWorker {
+	background: var(--sim-accent) !important;
 	box-shadow: 0 0 0 2px var(--sim-accent-soft);
 }
 
@@ -222,28 +255,41 @@
 	height: 0.35rem;
 	border-radius: 50%;
 	background: var(--sim-accent);
+	animation: packet 1.4s ease-in-out infinite;
 }
 
-.Track {
-	height: 0.5rem;
-	margin-top: 0.4rem;
-	overflow: hidden;
-	border-radius: 999px;
-	background: var(--sim-border);
+.LinkLine i:nth-child(2) {
+	animation-delay: 0.18s;
 }
 
-.QueueFill {
-	height: 100%;
-	border-radius: inherit;
+.LinkLine i:nth-child(3) {
+	animation-delay: 0.36s;
+}
+
+.QueueSlots {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 0.25rem;
+	margin-top: 0.45rem;
+}
+
+.QueueSlots span {
+	aspect-ratio: 1;
+	border: 1px solid var(--sim-border);
+	background: var(--color-bg-secondary);
+}
+
+.QueueSlots .Queued {
+	border-color: var(--sim-accent);
 	background: var(--sim-accent);
-	transition: width 0.25s ease;
 }
 
 .Metrics {
 	display: grid;
 	grid-template-columns: repeat(3, 1fr);
-	gap: 0.55rem;
-	margin-top: 0.65rem;
+	gap: 0.75rem;
+	margin-top: 1.2rem;
+	border-top: 1px solid var(--sim-border);
 }
 
 .Metrics > div {
@@ -251,9 +297,8 @@
 	justify-content: space-between;
 	align-items: baseline;
 	gap: 0.5rem;
-	padding: 0.6rem 0.7rem;
-	border-radius: 0.35rem;
-	background: var(--color-bg);
+	padding: 0.6rem 0;
+	border-bottom: 1px solid var(--sim-border);
 }
 
 .Metrics strong {
@@ -272,6 +317,19 @@
 .Reset {
 	flex: 0 0 auto;
 	color: var(--sim-muted);
+}
+
+@keyframes packet {
+	0%,
+	100% {
+		opacity: 0.35;
+		transform: translateX(-0.15rem) scale(0.85);
+	}
+
+	50% {
+		opacity: 1;
+		transform: translateX(0.15rem) scale(1.1);
+	}
 }
 
 @media only screen and (max-width: 700px) {
@@ -305,5 +363,11 @@
 @media only screen and (max-width: 430px) {
 	.Metrics {
 		grid-template-columns: 1fr;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.LinkLine i {
+		animation: none;
 	}
 }

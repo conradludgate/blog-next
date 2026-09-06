@@ -224,6 +224,10 @@ function clientLimit(client: ClientState, strategy: ControllerKind): number {
 	return Math.max(1, Math.floor(client.controller.limit));
 }
 
+function isAdaptive(strategy: ControllerKind): boolean {
+	return strategy === "aimd" || strategy === "vegas" || strategy === "gradient2";
+}
+
 function ewma(previous: number, sample: number, alpha = METRIC_EWMA_ALPHA): number {
 	return previous + alpha * (sample - previous);
 }
@@ -282,12 +286,28 @@ export function setClientCount(current: SimulationState, count: number): Simulat
 		return current;
 	}
 
-	const nextClients = current.clients.length < clients
+	const resizedClients = current.clients.length < clients
 		? [...current.clients, ...Array.from({ length: clients - current.clients.length }, () => createClient(current.strategy))]
 		: current.clients.slice(0, clients);
-	const jobs = current.jobs.map((job) => ({ ...job, client: Math.min(job.client, clients - 1) }));
+	const removedJobs = current.jobs.filter((job) => job.client >= clients);
+	const jobs = current.jobs.filter((job) => job.client < clients);
+	const nextClients = isAdaptive(current.strategy)
+		? (() => {
+			// A scale event changes the number of independent controllers. Keep the
+			// aggregate window stable, but give every controller an equal starting share.
+			const fairLimit = clamp(
+				current.clients.reduce((total, client) => total + client.controller.limit, 0) / clients,
+				1,
+				MAX_CONTROLLER_LIMIT,
+			);
+			return resizedClients.map((client) => ({
+				...client,
+				controller: { ...client.controller, limit: fairLimit },
+			}));
+		})()
+		: resizedClients;
 
-	return { ...current, clients: nextClients, jobs };
+	return { ...current, clients: nextClients, jobs, dropped: current.dropped + removedJobs.length };
 }
 
 export function setWorkerCount(current: SimulationState, count: number): SimulationState {
@@ -374,27 +394,29 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 
 	const sentByClient = current.clients.map(() => 0);
 	let nextJobId = current.nextJobId;
-	const clientsWithJobs = current.clients.map((client, clientIndex) => {
-		let rateCredit = client.rateCredit;
-		let inFlight = jobs.filter((job) => job.client === clientIndex).length;
-		if (current.strategy === "rate") {
-			rateCredit += RATE_PER_CLIENT * (TICK_MS / 1000);
-		}
+	const rateCredits = current.clients.map((client) => client.rateCredit + (current.strategy === "rate" ? RATE_PER_CLIENT * (TICK_MS / 1000) : 0));
+	const inFlights = current.clients.map((_, clientIndex) => jobs.filter((job) => job.client === clientIndex).length);
+	let admitted = true;
+	while (admitted) {
+		admitted = false;
+		// Interleave admissions so the shared FIFO reflects fair arrival order rather
+		// than whichever client happens to be first in the array.
+		current.clients.forEach((client, clientIndex) => {
+			const limit = clientLimit(client, current.strategy);
+			const shouldSend = current.strategy === "rate" ? rateCredits[clientIndex] >= 1 : inFlights[clientIndex] < limit;
+			if (!shouldSend) return;
 
-		const limit = clientLimit(client, current.strategy);
-		const shouldSend = () => current.strategy === "rate" ? rateCredit >= 1 : inFlight < limit;
-		while (shouldSend()) {
 			jobs.push({ id: nextJobId, client: clientIndex, stage: "network", remainingMs: current.networkMs, createdAt: nowMs });
 			nextJobId += 1;
 			sentByClient[clientIndex] += 1;
-			inFlight += 1;
+			inFlights[clientIndex] += 1;
 			if (current.strategy === "rate") {
-				rateCredit -= 1;
+				rateCredits[clientIndex] -= 1;
 			}
-		}
-
-		return { ...client, rateCredit };
-	});
+			admitted = true;
+		});
+	}
+	const clientsWithJobs = current.clients.map((client, clientIndex) => ({ ...client, rateCredit: rateCredits[clientIndex] }));
 	const clients = updateClients(clientsWithJobs, completedSamples, sentByClient);
 
 	const queueDepth = jobs.filter((job) => job.stage === "queue").length;

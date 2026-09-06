@@ -93,7 +93,7 @@ This post will work towards an answer by making the system interactive. The cloc
 
 ## 14. Delay feedback is local
 
-*Point:* Every client has its own RTT history and its own controller. No client knows the other clients’ windows, so fairness is an emergent property of competing local feedback loops—not a global reset or shared counter.
+*Point:* Every client has its own RTT history and its own controller. No client knows the other clients’ windows, so fairness is an emergent property of competing local feedback loops—not a global reset or shared counter. Equal delay is not the same thing as an equal share of capacity.
 
 *CTA:* Add clients and compare how quickly their individual windows respond to the same shared queue.
 
@@ -103,31 +103,45 @@ This post will work towards an answer by making the system interactive. The cloc
 
 *CTA:* Add clients while the queue is active, then remove them and watch which clients recover their baseline first.
 
-## 16. Gradient2 follows the trend
+## 16. The polite client can lose
+
+*Point:* Delay-based controllers are not automatically fair. A client that arrived early may have learned a clean baseline and already claimed a large share; a late client may treat the existing queue as normal. When every client sees the same increase in delay, proportional backoff can also preserve the imbalance rather than correct it. Worse, a delay-sensitive client competing with a loss-based or fixed-rate client may keep yielding while the aggressive client keeps filling the space it releases.
+
+*CTA:* Start one client, let it settle, then add a second client with a different offered rate. Wait for total throughput to stabilise and compare their individual completed rates—not just their latency or the global queue.
+
+## 17. Probe, drain, and leave headroom
+
+*Point:* Fairness needs an explicit convergence mechanism. BBRv3 offers three useful ideas: randomise the timing of upward bandwidth probes so clients do not move in lockstep; occasionally reduce in-flight work so a group of clients can refresh its unloaded-latency estimate; and deliberately leave headroom so a client with a smaller share can discover unused capacity. Loss or ECN can provide a second, harder signal when delay alone cannot identify who should yield. These mechanisms improve convergence, but do not turn decentralised control into a strict fair scheduler.
+
+*CTA:* Enable periodic probe cycles. Watch clients take staggered turns probing upward, then enter a brief drain phase together; compare how quickly unequal shares converge and what the probing costs in latency.
+
+*Reference:* [The BBRv3 specification](https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/) describes randomised ProbeBW timing, bandwidth headroom, and coordinated ProbeRTT episodes. We can borrow the shape of these mechanisms without pretending our request controller is TCP.
+
+## 18. Gradient2 follows the trend
 
 *Point:* Gradient2 compares a responsive short-term RTT EWMA with a slower long-term EWMA. A rising gap is evidence that queueing is getting worse, so it can reduce the local target before a single noisy sample dominates the decision.
 
 *CTA:* Select Gradient2, perturb the worker population, and look for the short-term latency moving before the long-term one.
 
-## 17. Turn a window into a smooth sending rate
+## 19. Turn a window into a smooth sending rate
 
 *Point:* The controller’s target concurrency still needs an admission mechanism. Each client uses its local `L` and EWMA latency `W` to derive `λ = L / W`, then uses a GCRA-style theoretical-arrival clock to spread requests instead of emitting a burst.
 
 *CTA:* Compare the spacing of jobs under an adaptive controller with the burstier fixed-concurrency behaviour.
 
-## 18. Scaling without magical coordination
+## 20. Scaling without magical coordination
 
 *Point:* Adding a client creates a cold local controller; existing clients keep their own state. Removing one cancels or drains only that client’s work. The simulator must show the transient unfairness honestly rather than silently equalising windows.
 
 *CTA:* Scale the client population up and down while the system is moving, and follow the work belonging to the clients that changed.
 
-## 19. Read the whole system, not one metric
+## 21. Read the whole system, not one metric
 
 *Point:* A controller can improve latency while reducing throughput, or increase utilisation while creating a queue. RED and USE together explain whether the system is healthy, saturated, rejecting, or simply underfed.
 
 *CTA:* Choose a controller, change workers and clients, and explain the resulting state using one RED signal and one USE signal.
 
-## 20. The final lesson
+## 22. The final lesson
 
 *Point:* Rate limits, concurrency limits, Vegas, Gradient2, Little’s Law, and GCRA are not competing magic numbers. They are different pieces of a feedback loop: measure the system, estimate a safe operating point locally, and control when the next piece of work is allowed to enter.
 

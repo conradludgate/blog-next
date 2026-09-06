@@ -11,9 +11,7 @@
 }
 
 .Header,
-.ColumnHeader,
-.EndpointHeader,
-.QueueHeader,
+.SceneControls,
 .Footer {
 	display: flex;
 	align-items: flex-start;
@@ -136,34 +134,26 @@
 	font-size: 0.9rem;
 }
 
-.System {
-	display: grid;
-	grid-template-columns: minmax(9rem, 1fr) minmax(11rem, 1.15fr) minmax(9rem, 1fr);
-	align-items: start;
-	gap: 0.9rem;
+.SceneFrame {
 	margin-top: 1.25rem;
+	border: 2px solid var(--color-fg);
+	border-radius: 0.55rem;
+	background: var(--color-bg);
+	box-shadow: 4px 4px 0 var(--sim-accent);
 }
 
-.ClientColumn,
-.NetworkColumn,
-.ServiceColumn {
-	display: flex;
-	flex-direction: column;
-	gap: 0.5rem;
-	min-width: 0;
-}
-
-.ColumnHeader {
+.SceneControls {
 	align-items: center;
-	min-height: 2.25rem;
-	padding-bottom: 0.35rem;
+	padding: 0.75rem;
 	border-bottom: 1px solid var(--sim-border);
 }
 
+.SceneControlGroup {
+	margin-left: auto;
+}
+
 .ColumnDetail,
-.EndpointDetail,
-.QueueCount,
-.EndpointHeader span,
+.SceneNote,
 .Footer p {
 	display: block;
 	color: var(--sim-muted);
@@ -174,48 +164,26 @@
 	margin-top: 0.15rem;
 }
 
-.Endpoint {
-	position: relative;
-	min-height: 4.3rem;
-	padding: 0.65rem 0.75rem;
-	border: 2px solid var(--color-fg);
-	border-radius: 0.45rem;
-	background: var(--color-bg);
-	box-shadow: 3px 3px 0 var(--sim-accent);
-}
-
-.EndpointHeader {
-	align-items: baseline;
-	gap: 0.5rem;
-}
-
-.EndpointHeader strong {
-	font-size: 0.95rem;
-}
-
-.EndpointDetail {
-	margin-top: 0.2rem;
-}
-
-.ClientMark,
-.WorkerMark {
-	display: block;
-	width: 0.75rem;
-	height: 0.75rem;
-	margin-top: 0.45rem;
-	border: 1.5px solid var(--sim-accent);
-	border-radius: 0.12rem;
-	background: var(--sim-accent-soft);
-}
-
-.WorkerMark {
-	border-radius: 50%;
-	transition: opacity 0.25s ease, background-color 0.25s ease;
-}
-
 .Stepper {
 	display: flex;
 	gap: 0.2rem;
+}
+
+.ControlSets {
+	display: flex;
+	gap: 0.8rem;
+}
+
+.ControlSet {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+}
+
+.ControlLabel {
+	color: var(--sim-muted);
+	font-size: 0.72rem;
+	text-transform: uppercase;
 }
 
 .Stepper button {
@@ -225,97 +193,18 @@
 	line-height: 1;
 }
 
-.NetworkHeader {
-	min-height: 2.25rem;
-}
-
-.NetworkStage {
-	position: relative;
-	overflow: hidden;
-	margin: 0.15rem 0 0;
-	border-left: 1px solid var(--sim-border);
-	border-right: 1px solid var(--sim-border);
-	background: color-mix(in srgb, var(--color-bg-secondary) 45%, transparent);
-}
-
-.NetworkRail {
-	position: absolute;
-	right: 0.5rem;
-	left: 0.5rem;
-	height: 1.3rem;
-	border-top: 1px dashed var(--sim-border);
-}
-
-.NetworkRail span {
-	position: absolute;
-	top: -0.55rem;
-	left: -0.35rem;
-	padding: 0 0.2rem;
+.SceneCanvas {
+	display: block;
+	width: 100%;
+	height: 32rem;
+	color: var(--color-fg);
 	background: var(--color-bg);
-	color: var(--sim-muted);
-	font-size: 0.68rem;
-	font-variant-numeric: tabular-nums;
 }
 
-.Job {
-	position: absolute;
-	left: -0.4rem;
-	width: 0.8rem;
-	height: 0.8rem;
-	border: 2px solid var(--color-fg);
-	border-radius: 50%;
-	background: var(--sim-accent);
-	box-shadow: 0 0 0 3px var(--sim-accent-soft);
-	animation-name: travel;
-	animation-timing-function: linear;
-	animation-iteration-count: 1;
-	animation-fill-mode: both;
-}
-
-.Queue {
-	padding: 0.75rem;
-	border: 2px dashed var(--color-fg);
-	border-radius: 0.45rem;
-	background: var(--color-bg);
-	transform: rotate(-0.5deg);
-}
-
-.QueueActive {
-	background: var(--sim-accent-soft);
-	box-shadow: 3px 3px 0 var(--sim-accent);
-}
-
-.QueueHeader {
-	align-items: baseline;
-}
-
-.QueueCount {
-	font-variant-numeric: tabular-nums;
-}
-
-.QueueSlots {
-	display: grid;
-	grid-template-columns: repeat(4, 1fr);
-	gap: 0.25rem;
-	margin-top: 0.55rem;
-}
-
-.QueueSlots span {
-	aspect-ratio: 1;
-	border: 1px solid var(--sim-border);
-	background: var(--color-bg-secondary);
-}
-
-.QueueSlots .Queued {
-	border-color: var(--sim-accent);
-	background: var(--sim-accent);
-	animation: queueArrive 0.35s ease-out;
-}
-
-.BusyWorker {
-	background: var(--sim-accent) !important;
-	box-shadow: 0 0 0 3px var(--sim-accent-soft);
-	animation: workerPulse 1.2s ease-in-out infinite;
+.SceneNote {
+	margin: 0;
+	padding: 0.65rem 0.75rem 0.75rem;
+	border-top: 1px solid var(--sim-border);
 }
 
 .Metrics {
@@ -358,48 +247,6 @@
 	color: var(--sim-muted);
 }
 
-@keyframes travel {
-	0% {
-		opacity: 0;
-		transform: translateX(0) scale(0.75);
-	}
-
-	12% {
-		opacity: 1;
-	}
-
-	88% {
-		opacity: 1;
-	}
-
-	100% {
-		left: calc(100% - 0.4rem);
-		opacity: 0;
-		transform: translateX(0) scale(1);
-	}
-}
-
-@keyframes queueArrive {
-	0% {
-		transform: scale(0.65);
-	}
-
-	100% {
-		transform: scale(1);
-	}
-}
-
-@keyframes workerPulse {
-	0%,
-	100% {
-		transform: scale(1);
-	}
-
-	50% {
-		transform: scale(1.12);
-	}
-}
-
 @media only screen and (max-width: 700px) {
 	.Header {
 		flex-direction: column;
@@ -410,24 +257,21 @@
 		justify-content: space-between;
 	}
 
-	.System {
-		grid-template-columns: 1fr;
+	.SceneControls {
+		flex-wrap: wrap;
 	}
 
-	.NetworkColumn {
-		order: 2;
+	.SceneControlGroup {
+		margin-left: 0;
 	}
 
-	.ServiceColumn {
-		order: 3;
+	.ControlSets {
+		width: 100%;
+		justify-content: flex-end;
 	}
 
-	.ClientColumn {
-		order: 1;
-	}
-
-	.NetworkStage {
-		min-height: 5rem !important;
+	.SceneCanvas {
+		height: 38rem;
 	}
 
 	.Footer {
@@ -439,13 +283,5 @@
 @media only screen and (max-width: 430px) {
 	.Metrics {
 		grid-template-columns: 1fr;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.Job,
-	.Queued,
-	.BusyWorker {
-		animation: none;
 	}
 }

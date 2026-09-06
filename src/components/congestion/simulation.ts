@@ -15,6 +15,13 @@ export interface ControllerState {
 export interface ClientState {
 	controller: ControllerState;
 	rateCredit: number;
+	metrics: ClientMetrics;
+}
+
+export interface ClientMetrics {
+	sentRate: number;
+	latencyMs: number;
+	rejectionRate: number;
 }
 
 export interface Job {
@@ -40,8 +47,6 @@ export interface SimulationState {
 	dropped: number;
 	completed: number;
 	sentRate: number;
-	sentInWindow: number;
-	windowMs: number;
 	nowMs: number;
 }
 
@@ -54,6 +59,7 @@ export const WORKER_TRAVEL_MS = 350;
 export const RATE_PER_CLIENT = 0.5;
 export const FIXED_CONCURRENCY_PER_CLIENT = 4;
 export const MAX_CONTROLLER_LIMIT = 16;
+export const METRIC_EWMA_ALPHA = 0.2;
 
 function createController(kind: ControllerKind): ControllerState {
 	return {
@@ -68,7 +74,15 @@ function createController(kind: ControllerKind): ControllerState {
 }
 
 function createClient(kind: ControllerKind): ClientState {
-	return { controller: createController(kind), rateCredit: 0 };
+	return {
+		controller: createController(kind),
+		rateCredit: 0,
+		metrics: {
+			sentRate: 0,
+			latencyMs: 1900,
+			rejectionRate: 0,
+		},
+	};
 }
 
 export function createInitialState(strategy: ControllerKind = "rate"): SimulationState {
@@ -86,8 +100,6 @@ export function createInitialState(strategy: ControllerKind = "rate"): Simulatio
 		dropped: 0,
 		completed: 0,
 		sentRate: 0,
-		sentInWindow: 0,
-		windowMs: 0,
 		nowMs: 0,
 	};
 }
@@ -175,13 +187,38 @@ function clientLimit(client: ClientState, strategy: ControllerKind): number {
 	return Math.max(1, Math.floor(client.controller.limit));
 }
 
-function updateClientControllers(clients: ClientState[], completed: Array<{ client: number; rttMs: number; dropped: boolean }>): ClientState[] {
+function ewma(previous: number, sample: number, alpha = METRIC_EWMA_ALPHA): number {
+	return previous + alpha * (sample - previous);
+}
+
+function updateClients(
+	clients: ClientState[],
+	samples: Array<{ client: number; rttMs: number; dropped: boolean }>,
+	sentByClient: number[],
+): ClientState[] {
 	return clients.map((client, index) => {
-		const samples = completed.filter((sample) => sample.client === index);
-		return samples.reduce(
-			(current, sample) => ({ ...current, controller: updateController(current.controller, sample.rttMs, sample.dropped) }),
-			client,
+		const clientSamples = samples.filter((sample) => sample.client === index);
+		const successfulSamples = clientSamples.filter((sample) => !sample.dropped);
+		const droppedCount = clientSamples.length - successfulSamples.length;
+		const averageRtt = successfulSamples.length > 0
+			? successfulSamples.reduce((total, sample) => total + sample.rttMs, 0) / successfulSamples.length
+			: client.metrics.latencyMs;
+		const requestCount = clientSamples.length;
+		const rejectionRate = requestCount > 0 ? droppedCount / requestCount : 0;
+		const controller = clientSamples.reduce(
+			(current, sample) => updateController(current, sample.rttMs, sample.dropped),
+			client.controller,
 		);
+
+		return {
+			...client,
+			controller,
+			metrics: {
+				sentRate: ewma(client.metrics.sentRate, sentByClient[index] * (1000 / TICK_MS)),
+				latencyMs: successfulSamples.length > 0 ? ewma(client.metrics.latencyMs, averageRtt) : client.metrics.latencyMs,
+				rejectionRate: ewma(client.metrics.rejectionRate, rejectionRate),
+			},
+		};
 	});
 }
 
@@ -290,10 +327,9 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 		occupiedWorkers.add(worker);
 	}
 
-	const clients = updateClientControllers(current.clients, completedSamples);
-	let sent = 0;
+	const sentByClient = current.clients.map(() => 0);
 	let nextJobId = current.nextJobId;
-	const clientsWithJobs = clients.map((client, clientIndex) => {
+	const clientsWithJobs = current.clients.map((client, clientIndex) => {
 		let rateCredit = client.rateCredit;
 		let inFlight = jobs.filter((job) => job.client === clientIndex).length;
 		if (current.strategy === "rate") {
@@ -305,7 +341,7 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 		while (shouldSend()) {
 			jobs.push({ id: nextJobId, client: clientIndex, stage: "network", remainingMs: current.networkMs, createdAt: nowMs });
 			nextJobId += 1;
-			sent += 1;
+			sentByClient[clientIndex] += 1;
 			inFlight += 1;
 			if (current.strategy === "rate") {
 				rateCredit -= 1;
@@ -314,15 +350,11 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 
 		return { ...client, rateCredit };
 	});
+	const clients = updateClients(clientsWithJobs, completedSamples, sentByClient);
 
 	const queueDepth = jobs.filter((job) => job.stage === "queue").length;
-	const maxQueue = Math.max(
-		0,
-		...Array.from({ length: current.workers }, (_, worker) => jobs.filter((job) => job.stage === "queue" && job.service === worker).length),
-	);
-	const windowMs = current.windowMs + TICK_MS;
-	const sentInWindow = current.sentInWindow + sent;
-	const sentRate = windowMs >= 1000 ? Math.round((sentInWindow * 1000 * 10) / windowMs) / 10 : current.sentRate;
+	const sentRate = clients.reduce((total, client) => total + client.metrics.sentRate, 0);
+	const latencyMs = clients.reduce((total, client) => total + client.metrics.latencyMs, 0) / clients.length;
 
 	return {
 		...current,
@@ -331,12 +363,10 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 		jobs,
 		nextJobId,
 		queueDepth,
-		latencyMs: current.networkMs + current.serviceMs + maxQueue * current.serviceMs,
+		latencyMs,
 		dropped: current.dropped + rejectedJobs.length,
 		completed: current.completed + completedSamples.filter((sample) => !sample.dropped).length,
 		sentRate,
-		sentInWindow: windowMs >= 1000 ? 0 : sentInWindow,
-		windowMs: windowMs >= 1000 ? 0 : windowMs,
 		nowMs,
 	};
 }

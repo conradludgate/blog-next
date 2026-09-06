@@ -257,6 +257,28 @@ function drawScene(ctx: CanvasRenderingContext2D, width: number, height: number,
 	});
 }
 
+function formatTwoSignificantFigures(value: number): string {
+	if (!Number.isFinite(value) || value === 0) {
+		return "0";
+	}
+
+	const exponent = Math.floor(Math.log10(Math.abs(value)));
+	const step = 10 ** (exponent - 1);
+	const truncated = Math.trunc(value / step) * step;
+	if (step >= 1) {
+		return String(truncated);
+	}
+
+	const decimalPlaces = Math.ceil(-Math.log10(step));
+	return truncated.toFixed(decimalPlaces).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatLatency(milliseconds: number): string {
+	return milliseconds >= 1000
+		? formatTwoSignificantFigures(milliseconds / 1000) + "s"
+		: formatTwoSignificantFigures(milliseconds) + "ms";
+}
+
 const CONTROLLER_OPTIONS: Array<{ kind: ControllerKind; label: string }> = [
 	{ kind: "rate", label: "Rate" },
 	{ kind: "concurrency", label: "Concurrency" },
@@ -270,6 +292,7 @@ export default function CongestionSimulator() {
 	const [state, setState] = useState<SimulationState>(() => createInitialState());
 	const metrics = useMemo(() => ({
 		averageLimit: state.clients.reduce((total, client) => total + client.controller.limit, 0) / state.clients.length,
+		rejectionRate: state.clients.reduce((total, client) => total + client.metrics.rejectionRate, 0) / state.clients.length,
 		capacity: serviceCapacity(state),
 	}), [state]);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -357,7 +380,7 @@ export default function CongestionSimulator() {
 					<h2 id="congestion-simulator-title">A fixed limit meets a changing system</h2>
 			</div>
 			<div className={styles.HeaderControls}>
-					<span className={styles.Clock}>t = {(state.nowMs / 1000).toFixed(1)}s</span>
+					<span className={styles.Clock}>t = {formatTwoSignificantFigures(state.nowMs / 1000)}s</span>
 					<button
 						type="button"
 						className={styles.Play}
@@ -433,10 +456,10 @@ export default function CongestionSimulator() {
 			</div>
 
 			<div className={styles.Metrics} aria-live="polite">
-				<div><span>Sent rate</span><strong>{state.sentRate.toFixed(1)}/s</strong></div>
-				<div><span>Client limit</span><strong>{state.strategy === "rate" ? `${RATE_PER_CLIENT}/s` : metrics.averageLimit.toFixed(1)}</strong></div>
-				<div><span>Observed latency</span><strong>{state.latencyMs}ms</strong></div>
-				<div><span>Rejected</span><strong>{state.dropped}</strong></div>
+				<div><span>Sent rate</span><strong>{formatTwoSignificantFigures(state.sentRate)}/s</strong></div>
+				<div><span>Client limit</span><strong>{state.strategy === "rate" ? `${formatTwoSignificantFigures(RATE_PER_CLIENT)}/s` : formatTwoSignificantFigures(metrics.averageLimit)}</strong></div>
+				<div><span>Observed latency</span><strong>{formatLatency(state.latencyMs)}</strong></div>
+				<div><span>Reject rate</span><strong>{formatTwoSignificantFigures(metrics.rejectionRate * 100)}%</strong></div>
 			</div>
 
 			<div className={styles.Footer}>

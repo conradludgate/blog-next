@@ -4,12 +4,47 @@ export const meta = {
   title: "A simulator-first tour of congestion control",
   date: "2026-09-06",
   tags: ["dev", "performance", "distributed-systems"],
-  desc: "Why fixed rate and concurrency limits struggle, and how congestion controllers adapt.",
+  desc: "How clients can decide when—and where—to send work as downstream capacity changes.",
 };
 
-Rate limits and concurrency limits are simple, useful tools. They also hide an awkward question: how did we decide what the limit should be?
+When one service calls another, sending requests faster is not always better. As downstream workers approach capacity, queues form, latency rises, and requests begin to miss their deadlines. Retrying those requests creates more demand at exactly the moment the service has the least capacity to spare. Push hard enough and useful throughput can fall even as every part of the system gets busier.
 
-This post will work towards an answer by making the system interactive. The clock runs continuously, but every experiment asks the reader to change something and watch the system answer. These are scene briefs rather than finished prose: each section records the claim, the simulator state required to demonstrate it, the reader’s action, and the idea that earns the next section.
+Backpressure can protect the service, but it leaves the caller with a difficult decision. It must estimate how much work each downstream worker can accept, decide where the next request should go, and sometimes wait instead of sending immediately. That decision becomes harder when both services are horizontally scaled, processing time varies, and no replica has a complete view of the system.
+
+In this interactive article, we will build that decision from first principles. We will begin with fixed rate and concurrency limits, distribute requests across independently queued workers, and measure the result from the client. We will then turn those measurements into adaptive per-worker limits and paced admissions, exploring Power of Two load balancing, AIMD, Vegas, Gradient2, Little’s Law, fairness, and probing along the way.
+
+The aim is not to discover one perfect controller. It is to develop a model for client-side congestion control: choose where work should go, decide whether it is safe to send, and propagate backpressure before overload becomes failure.
+
+## Prelude: why not just send everything?
+
+Imagine two services in the same distributed system. The first receives or produces work and calls the second to complete part of it. We will call them the **client service** and the **worker service**, but those names describe their roles in this one interaction. The client service may itself be a worker for something further upstream.
+
+Both sides are horizontally scaled. Several independent client instances send requests to several independent workers. Each worker has finite processing capacity and a small queue. The network adds some latency, endpoint discovery changes over time, and individual workers sometimes become faster or slower. No client knows exactly how much total demand exists, and no worker knows how much work all of the clients are about to send.
+
+The tempting policy is to send every request as soon as it arrives. If the selected worker cannot accept it, return an error and let the caller retry.
+
+This works while demand is comfortably below capacity. More requests produce more completed work, so the system appears to reward us for driving it harder. The problem begins near saturation. A worker can only process so many requests at once; additional requests must wait. Every waiting request consumes time and usually some combination of memory, connection state, task state, and deadline budget without increasing the worker’s useful throughput.
+
+Removing an explicit application queue does not remove this waiting. It moves it. Requests can accumulate in a caller, a connection pool, an HTTP/2 stream limit, a socket buffer, a load balancer, an executor, or the operating-system scheduler. The caller experiences all of these locations as increased latency, even when the worker’s own queue appears empty.
+
+Eventually requests wait longer than their deadlines. Some may still reach the worker and consume resources even though the caller no longer wants their answers. Others are cancelled, rejected, or retried. A retry is particularly dangerous during overload: it turns evidence that the system has too much work into another piece of work. If many callers make the same reasonable local decision, they can keep a recovering service overloaded long after the original burst has ended.
+
+Real services can also lose useful capacity under pressure. They spend more time managing queues, allocating memory, switching tasks, contending on locks, cleaning up cancelled work, and producing responses that arrive too late to be useful. Offered load continues to rise while completed, useful throughput flattens or even falls.
+
+The alternative is to apply backpressure before every request enters the worker service. When a worker appears busy, the client can hold a request briefly and admit it when capacity becomes available. Waiting at the client makes the queue intentional: it can be bounded, included in the request deadline, cancelled before consuming downstream resources, and paced so that released work does not arrive in another burst.
+
+This does not mean waiting forever. If the client-side queue is full or the request cannot be dispatched within its deadline, rejection is the honest outcome. Otherwise backpressure would merely exchange server overload for unbounded memory growth and enormous latency in the caller. Retries must enter the same admission path as original attempts; they cannot be allowed to bypass the very mechanism protecting the service.
+
+So our problem is not whether requests should ever wait. They inevitably will. The questions are:
+
+- Where should they wait?
+- How much waiting work should be allowed?
+- Which worker should receive the next request?
+- What observation tells a client to slow down—or that it is safe to speed up again?
+
+The rest of the article will answer those questions by changing one part of a running system at a time. The clock will continue to move, but every experiment will ask you to perturb the system and watch how it responds.
+
+The sections below are still scene briefs rather than finished prose. Each records the claim, simulator state, reader action, and transition required for the final article.
 
 ## Act one: learn to see congestion
 

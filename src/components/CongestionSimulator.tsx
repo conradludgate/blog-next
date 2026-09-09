@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import styles from "@/styles/CongestionSimulator.module.css";
+import { LESSONS, createLesson, applyLessonAction } from "./congestion/lessons";
 import PixiCongestionScene from "./congestion/PixiCongestionScene";
 import {
 	advanceSimulation,
-	createInitialState,
 	FIXED_CONCURRENCY_PER_ENDPOINT,
 	MAX_CLIENTS,
 	MAX_WORKERS,
@@ -54,7 +54,11 @@ function formatLatency(milliseconds: number): string {
 
 export default function CongestionSimulator() {
 	const [isRunning, setIsRunning] = useState(true);
-	const [state, setState] = useState<SimulationState>(() => createInitialState());
+	const [state, setState] = useState<SimulationState>(() => createLesson(0));
+	const [lessonIndex, setLessonIndex] = useState(0);
+	const [guided, setGuided] = useState(true);
+	const [acted, setActed] = useState(false);
+	const lesson = LESSONS[lessonIndex];
 	const metrics = useMemo(() => ({
 		rejectionRate: state.rejectionRate,
 		capacity: serviceCapacity(state),
@@ -90,7 +94,22 @@ export default function CongestionSimulator() {
 		setState((current) => setWorkerCount(current, current.workers + delta));
 	}
 
+	function loadLesson(index: number) {
+		setLessonIndex(index);
+		setState(createLesson(index));
+		setActed(false);
+		setGuided(true);
+		setIsRunning(true);
+	}
+
+	function runLessonAction() {
+		setState((current) => applyLessonAction(current, lessonIndex));
+		setActed(true);
+		setIsRunning(true);
+	}
+
 	function reset() {
+		if (guided) { loadLesson(lessonIndex); return; }
 		setState((current) => setSimulationStrategy(current, current.strategy));
 	}
 
@@ -98,8 +117,8 @@ export default function CongestionSimulator() {
 		<section className={styles.Simulator} aria-labelledby="congestion-simulator-title">
 			<div className={styles.Header}>
 				<div>
-					<p className={styles.Eyebrow}>Interactive experiment</p>
-					<h2 id="congestion-simulator-title">A fixed limit meets a changing system</h2>
+					<p className={styles.Eyebrow}>{guided ? `Experiment ${lessonIndex + 1} of ${LESSONS.length}` : "Free exploration"}</p>
+					<h2 id="congestion-simulator-title">{guided ? lesson.title : "A fixed limit meets a changing system"}</h2>
 				</div>
 				<div className={styles.HeaderControls}>
 					<span className={styles.Clock}>t = {formatMetricValue(state.nowMs / 1000)}s</span>
@@ -117,14 +136,25 @@ export default function CongestionSimulator() {
 				</div>
 			</div>
 
-			<div className={styles.Challenge}>
-				<div>
-					<span className={styles.ChallengeLabel}>Try it</span>
-					<p>Use the + controls to add clients until work starts waiting. Then add a worker and watch requests discover its empty queue.</p>
+			{guided ? <div className={styles.Lesson}>
+				<p>{lesson.introduction}</p>
+				<div className={styles.LessonActions}>
+					<button type="button" disabled={acted} onClick={runLessonAction}>{acted ? "Change applied" : lesson.action}</button>
+					<button type="button" onClick={() => loadLesson(lessonIndex)}>Replay experiment</button>
+					<button type="button" onClick={() => setGuided(false)}>Explore freely</button>
 				</div>
-			</div>
+				<p className={styles.Observation} aria-live="polite">{acted ? lesson.observation : "Make a prediction, then apply the change. The clock keeps running."}</p>
+				<nav className={styles.LessonActions} aria-label="Experiments">
+					<button type="button" disabled={lessonIndex === 0} onClick={() => loadLesson(lessonIndex - 1)}>Previous</button>
+					<button type="button" disabled={!acted} onClick={() => lessonIndex + 1 < LESSONS.length ? loadLesson(lessonIndex + 1) : setGuided(false)}>{lessonIndex + 1 < LESSONS.length ? "Next experiment" : "Explore all controllers"}</button>
+				</nav>
+				<small>Each experiment starts a fresh run. Applying its change preserves requests and existing controller histories.</small>
+			</div> : <div className={styles.Challenge}>
+				<p>Change clients, workers, or processing time and follow the response.</p>
+				<button className={styles.Reset} type="button" onClick={() => loadLesson(0)}>Restart guided tour</button>
+			</div>}
 
-			<div className={styles.ControllerRow}>
+			{!guided && <div className={styles.ControllerRow}>
 				<span className={styles.ControllerLabel}>Clients send using</span>
 				<select className={styles.MobileController} aria-label="Choose how clients send work" value={state.strategy} onChange={(event) => changeStrategy(event.target.value as ControllerKind)}>
 					{CONTROLLER_OPTIONS.map((option) => <option value={option.kind} key={option.kind}>{option.label}</option>)}
@@ -142,7 +172,7 @@ export default function CongestionSimulator() {
 						</button>
 					))}
 				</div>
-			</div>
+			</div>}
 
 			<p className={styles.Description} aria-live="polite">
 				{state.strategy === "rate" && `${RATE_PER_ENDPOINT} requests per second per client–worker pair. Every client uses Power of Two to choose a destination.`}
@@ -158,20 +188,25 @@ export default function CongestionSimulator() {
 						<div className={styles.ControlSet}>
 							<span className={styles.ControlLabel}>Clients <strong>{state.clients.length}</strong></span>
 							<div className={styles.Stepper}>
-								<button type="button" aria-label="Remove client" disabled={state.clients.length === 1} onClick={() => changeClients(-1)}>−</button>
-								<button type="button" aria-label="Add client" disabled={state.clients.length === MAX_CLIENTS} onClick={() => changeClients(1)}>+</button>
+								<button type="button" aria-label="Remove client" disabled={guided || state.clients.length === 1} onClick={() => changeClients(-1)}>−</button>
+								<button type="button" aria-label="Add client" disabled={guided || state.clients.length === MAX_CLIENTS} onClick={() => changeClients(1)}>+</button>
 							</div>
 						</div>
 						<div className={styles.ControlSet}>
 							<span className={styles.ControlLabel}>Workers <strong>{state.workers}</strong></span>
 							<div className={styles.Stepper}>
-								<button type="button" aria-label="Remove worker" disabled={state.workers === 1} onClick={() => changeWorkers(-1)}>−</button>
-								<button type="button" aria-label="Add worker" disabled={state.workers === MAX_WORKERS} onClick={() => changeWorkers(1)}>+</button>
+								<button type="button" aria-label="Remove worker" disabled={guided || state.workers === 1} onClick={() => changeWorkers(-1)}>−</button>
+								<button type="button" aria-label="Add worker" disabled={guided || state.workers === MAX_WORKERS} onClick={() => changeWorkers(1)}>+</button>
 							</div>
 						</div>
 					</div>
+					{!guided && <label className={styles.ControlLabel}>Processing time
+						<select className={styles.ProcessingTime} value={state.serviceMs} onChange={(event) => setState((current) => ({ ...current, serviceMs: Number(event.target.value) }))}>
+							<option value={1000}>Normal</option><option value={3000}>3× slower</option>
+						</select>
+					</label>}
 					<div className={styles.CapacitySummary}>
-						<span>Estimated capacity</span>
+						<span>{state.serviceMs === 3000 ? "Slower workers · capacity" : "Estimated capacity"}</span>
 						<strong>{formatMetricValue(metrics.capacity)} jobs/s</strong>
 					</div>
 				</div>

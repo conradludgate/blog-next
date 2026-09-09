@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { advanceSimulation, chooseEndpoint, createInitialState, sampleTwo, setClientCount, setWorkerCount, WORKER_QUEUE_LIMIT } from '../src/components/congestion/simulation.ts';
+import { advanceSimulation, chooseEndpoint, createInitialState, sampleTwo, setClientCount, setWorkerCount, setStrategy, WORKER_QUEUE_LIMIT } from '../src/components/congestion/simulation.ts';
 
 function job(id, service, stage = 'queue') {
   return { id, client: 0, service, stage, remainingMs: stage === 'service' ? 10000 : 0, createdAt: 0 };
@@ -108,3 +108,14 @@ test('all strategies keep valid destinations and bounded queues through fleet ch
     assert.ok(state.completed > 0);
   }
 });
+
+ test('changing controller preserves the processing-time scenario', () => {
+  const state = createInitialState();
+  state.serviceMs = 3000;
+  state.networkMs = 1250;
+  const next = setStrategy(state, 'concurrency');
+  assert.equal(next.serviceMs, 3000);
+  assert.equal(next.networkMs, 1250);
+  assert.equal(next.nowMs, 0);
+  assert.equal(next.jobs.length, 0);
+ });

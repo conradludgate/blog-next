@@ -393,6 +393,8 @@ export function setStrategy(current: SimulationState, strategy: ControllerKind):
 	return {
 		...next,
 		workers: current.workers,
+		serviceMs: current.serviceMs,
+		networkMs: current.networkMs,
 		workerPerformance: current.workerPerformance.slice(0, current.workers),
 		clients: current.clients.map(() => createClient(strategy, current.workers)),
 	};

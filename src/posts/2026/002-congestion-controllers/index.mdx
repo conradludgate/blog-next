@@ -50,21 +50,27 @@ So our problem is not whether requests should ever wait. They inevitably will. T
 
 The rest of the article will answer those questions by changing one part of a running system at a time. The clock will continue to move, but every experiment will ask you to perturb the system and watch how it responds.
 
-The sections below are still scene briefs rather than finished prose. Each records the claim, simulator state, reader action, and transition required for the final article.
+## A limit that worked yesterday
 
-## Act one: learn to see congestion
+Start with one client and four workers. Every coloured dot is a request, and every worker has a small queue of its own. The client samples two workers and uses its own latency and in-flight observations to choose between them. That routing policy stays the same throughout these experiments.
 
-## 1. Start with a tiny service
+First we limit how often requests can start. Each client may send at most half a request per second to each worker. This is a local budget: adding another client adds another set of budgets. No existing client is told to give up part of its allowance.
 
-*Story:* Establish a deliberately legible world. One client sends jobs across a network path to four independently queued workers. The client chooses a destination before sending, using Power of Two and its own per-worker observations. Start with this real topology and reveal its decisions gradually.
+Use the guided experiments below to change one thing at a time. Watch **completed throughput** as well as offered load. More arrivals do not necessarily mean more useful work. The queue shows waiting directly, while the duration measurement includes the time successful requests spend getting to the worker, waiting, and being processed.
 
-*Simulator:* Start below capacity. Every job retains its client colour from departure to completion. Workers visibly switch between idle and busy. Each request follows its selected route into that worker’s bounded queue; the client–worker inspector exposes local state.
+The second and third experiments apply the same processing-time increase to rate and concurrency limits. A rate budget does not shrink when work becomes slower. A concurrency permit, however, stays occupied until the request finishes, so the rate of new admissions falls naturally. These settings do not have identical baseline throughput; compare their response to the slowdown, rather than treating the absolute numbers as a controller benchmark.
 
-*CTA:* Let several jobs complete, then add one worker. Follow a single job all the way through and notice that extra capacity is mostly idle while demand remains low.
-
-*Exit:* More workers do not automatically create more work. We need measurements that distinguish an idle system from a healthy but busy one.
+That still leaves a choice: how much unfinished work should each client allow? A fixed permit count cannot know how many other clients are competing for the same worker. The final experiment introduces Vegas, which uses latency observations to adjust that target. Its estimates are local, so the result depends on when clients arrive and what they observe.
 
 <CongestionSimulator />
+
+Concurrency connects rate and duration: in steady state, average work in flight equals completed throughput multiplied by average latency. A fixed concurrency limit therefore reduces the sending rate as latency rises. An adaptive controller goes further by changing the target itself; pacing turns that potentially fractional target into spaced-out requests.
+
+We now have the central question for the rest of the article: **which observation should make a client change its limit?** Loss provides an explicit signal, but only after a queue refuses work. Delay can warn earlier, but separating service time from queueing—and sharing capacity fairly—takes more care.
+
+The remaining sections are development briefs for expanding these experiments, rather than finished prose.
+
+## Act one: learn to see congestion
 
 ## 2. Make the work visible
 

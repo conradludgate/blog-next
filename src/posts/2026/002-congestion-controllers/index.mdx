@@ -56,9 +56,9 @@ The sections below are still scene briefs rather than finished prose. Each recor
 
 ## 1. Start with a tiny service
 
-*Story:* Establish a deliberately legible world. One client sends jobs across a network path, through a load balancer, and into a service with four workers. The opening model cheats by drawing one shared FIFO queue. That is not the final architecture; it lets the reader learn the visual language before we expose placement as another variable.
+*Story:* Establish a deliberately legible world. One client sends jobs across a network path to four independently queued workers. The client chooses a destination before sending, using Power of Two and its own per-worker observations. Start with this real topology and reveal its decisions gradually.
 
-*Simulator:* Start below capacity. Every job retains its client colour from departure to completion. Workers visibly switch between idle and busy, while the load balancer is initially an inert waypoint rather than a configurable algorithm.
+*Simulator:* Start below capacity. Every job retains its client colour from departure to completion. Workers visibly switch between idle and busy. Each request follows its selected route into that worker’s bounded queue; the client–worker inspector exposes local state.
 
 *CTA:* Let several jobs complete, then add one worker. Follow a single job all the way through and notice that extra capacity is mostly idle while demand remains low.
 
@@ -90,7 +90,7 @@ The sections below are still scene briefs rather than finished prose. Each recor
 
 ## 4. Open the load balancer
 
-*Story:* The shared queue has served its teaching purpose. In a horizontally scaled service, workers normally accept connections or requests independently and have separate queues. A load balancer chooses where work goes; it does not magically pool every worker’s capacity behind one perfectly fair FIFO.
+*Story:* Contrast the implemented per-worker topology with an idealised shared queue. In a horizontally scaled service, workers normally accept connections or requests independently and have separate queues. A load balancer chooses where work goes; it does not magically pool every worker’s capacity behind one perfectly fair FIFO.
 
 *Simulator:* Animate the shared queue splitting into one small bounded queue per worker. The client receives a changing endpoint set from service discovery and can address workers directly. A network load balancer may still exist for reachability, but it no longer owns scheduling state.
 

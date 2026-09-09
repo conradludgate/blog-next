@@ -218,3 +218,9 @@
   .Description { line-height: 1.5; }
   .Metrics > div { padding: 0.65rem; }
 }
+
+.EndpointDetails { margin-top: 1rem; font-size: 0.875rem; }
+.EndpointDetails summary { cursor: pointer; padding-block: 0.75rem; font-weight: 700; }
+.EndpointTable { overflow-x: auto; max-height: 24rem; }
+.EndpointTable table { width: 100%; border-collapse: collapse; text-align: left; font-variant-numeric: tabular-nums; }
+.EndpointTable th, .EndpointTable td { padding: 0.5rem; border-bottom: 1px solid var(--sim-border); }

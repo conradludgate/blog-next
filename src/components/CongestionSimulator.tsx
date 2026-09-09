@@ -6,15 +6,16 @@ import PixiCongestionScene from "./congestion/PixiCongestionScene";
 import {
 	advanceSimulation,
 	createInitialState,
-	FIXED_CONCURRENCY_PER_CLIENT,
+	FIXED_CONCURRENCY_PER_ENDPOINT,
 	MAX_CLIENTS,
 	MAX_WORKERS,
-	RATE_PER_CLIENT,
+	RATE_PER_ENDPOINT,
 	setClientCount,
 	setStrategy as setSimulationStrategy,
 	setWorkerCount,
 	serviceCapacity,
 	TICK_MS,
+	WORKER_QUEUE_LIMIT,
 } from "./congestion/simulation";
 import type { ControllerKind, SimulationState } from "./congestion/simulation";
 
@@ -119,7 +120,7 @@ export default function CongestionSimulator() {
 			<div className={styles.Challenge}>
 				<div>
 					<span className={styles.ChallengeLabel}>Try it</span>
-					<p>Use the + controls to add clients until work starts waiting. Then add a worker and watch the queue drain.</p>
+					<p>Use the + controls to add clients until work starts waiting. Then add a worker and watch requests discover its empty queue.</p>
 				</div>
 			</div>
 
@@ -144,8 +145,8 @@ export default function CongestionSimulator() {
 			</div>
 
 			<p className={styles.Description} aria-live="polite">
-				{state.strategy === "rate" && `${RATE_PER_CLIENT} requests per second from every client, even when the service slows down.`}
-				{state.strategy === "concurrency" && `${FIXED_CONCURRENCY_PER_CLIENT} requests in flight per client. Slower responses naturally slow new work.`}
+				{state.strategy === "rate" && `${RATE_PER_ENDPOINT} requests per second per client–worker pair. Every client uses Power of Two to choose a destination.`}
+				{state.strategy === "concurrency" && `${FIXED_CONCURRENCY_PER_ENDPOINT} request in flight per client–worker pair. Each worker has its own admission limit.`}
 				{state.strategy === "aimd" && "Increase after success; halve the window only after the queue rejects work."}
 				{state.strategy === "vegas" && "Estimate queueing delay and back off before the queue reaches its limit."}
 				{state.strategy === "gradient2" && "Compare short- and long-term latency, following changes in service capacity."}
@@ -177,9 +178,9 @@ export default function CongestionSimulator() {
 				<PixiCongestionScene state={state} />
 				<p className={styles.ScreenReaderSummary}>There are {state.clients.length} clients, {state.workers} workers, and {state.queueDepth} jobs waiting. {state.dropped} jobs have been rejected.</p>
 				<div className={styles.QueueMeter}>
-					<span>Shared FIFO queue</span>
-					<div className={styles.QueueTrack} aria-hidden="true"><i style={{ width: `${state.queueDepth / 16 * 100}%` }} /></div>
-					<strong>{state.queueDepth} / 16</strong>
+					<span>Total queued</span>
+					<div className={styles.QueueTrack} aria-hidden="true"><i style={{ width: `${state.queueDepth / (state.workers * WORKER_QUEUE_LIMIT) * 100}%` }} /></div>
+					<strong>{state.queueDepth} / {state.workers * WORKER_QUEUE_LIMIT}</strong>
 				</div>
 			</div>
 
@@ -190,6 +191,23 @@ export default function CongestionSimulator() {
 				<div className={state.queueDepth > 0 ? styles.MetricWarning : ""}><span><b>Saturation</b> Waiting</span><strong>{state.queueDepth}</strong></div>
 			</div>
 
+			<details className={styles.EndpointDetails}>
+				<summary>Inspect client–worker controllers</summary>
+				<p>Each client keeps its own latency estimate and limit for each worker. The source waits when both sampled workers have no admission budget.</p>
+				<div className={styles.EndpointTable}>
+					<table>
+						<thead><tr><th>Client → worker</th><th>In flight</th><th>Limit</th><th>RTT</th></tr></thead>
+						<tbody>{state.clients.flatMap((client, clientIndex) => client.endpoints.map((endpoint, worker) => (
+							<tr key={`${clientIndex}:${worker}`}>
+								<th scope="row">{clientIndex + 1} → {worker + 1}</th>
+								<td>{state.jobs.filter((job) => job.client === clientIndex && job.service === worker).length}</td>
+								<td>{state.strategy === "rate" ? `${RATE_PER_ENDPOINT}/s` : formatMetricValue(endpoint.controller.limit)}</td>
+								<td>{endpoint.observed ? formatLatency(endpoint.metrics.latencyMs) : "Cold"}</td>
+							</tr>
+						)))}</tbody>
+					</table>
+				</div>
+			</details>
 			<div className={styles.Footer}>
 				<p>Each dot is one request. Rates and outcomes cover the last 10 seconds (since reset during startup). Rejection is the share of finished attempts rejected by the queue; latency measures successful requests. A dash means no samples.</p>
 				<button type="button" className={styles.Reset} onClick={reset}>Start over</button>

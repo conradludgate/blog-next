@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { advanceSimulation, createInitialState, serviceCapacity, setClientCount, summarizeMetrics, TICK_MS } from '../src/components/congestion/simulation.ts';
+import { advanceSimulation, createInitialState, serviceCapacity, setClientCount, setWorkerCount, summarizeMetrics, TICK_MS } from '../src/components/congestion/simulation.ts';
 
 test('saturated completion rate matches capacity including dispatch and tick rounding', (t) => {
   t.mock.method(Math, 'random', () => 0.5);
-  let state = setClientCount(createInitialState('concurrency'), 8);
+  let state = setClientCount(setWorkerCount(createInitialState('concurrency'), 1), 8);
   const capacity = serviceCapacity(state);
-  assert.equal(capacity, 4 / 1.5);
+  assert.equal(capacity, 1 / 1.5);
   for (let i = 0; i < 400; i++) state = advanceSimulation(state);
   const before = state.completed;
   for (let i = 0; i < 1200; i++) state = advanceSimulation(state);
@@ -18,10 +18,10 @@ test('rejections trigger backoff without becoming successful RTT samples', (t) =
   t.mock.method(Math, 'random', () => 0.5);
   for (const strategy of ['vegas', 'gradient2']) {
     let state = createInitialState(strategy);
-    state.clients[0].controller = { ...state.clients[0].controller, limit: 8, minRtt: 3000, shortRtt: 3000, longRtt: 3000 };
-    state.jobs = Array.from({ length: 17 }, (_, id) => ({ id, client: 0, stage: 'queue', remainingMs: 0, createdAt: 0 }));
+    state.clients[0].endpoints[0].controller = { ...state.clients[0].endpoints[0].controller, limit: 8, minRtt: 3000, shortRtt: 3000, longRtt: 3000 };
+    state.jobs = Array.from({ length: 5 }, (_, id) => ({ id, client: 0, service: 0, stage: 'queue', remainingMs: 0, createdAt: 0 }));
     state = advanceSimulation(state);
-    const controller = state.clients[0].controller;
+    const controller = state.clients[0].endpoints[0].controller;
     assert.equal(state.dropped, 1);
     assert.equal(controller.minRtt, 3000);
     assert.equal(controller.sampleCount, 0);
@@ -61,7 +61,7 @@ test('old outcomes expire and empty windows do not invent measurements', () => {
 
 test('removing clients cancels work without fabricating server rejections or losing recent throughput', () => {
   const state = setClientCount(createInitialState(), 2);
-  state.jobs = [{ id: 1, client: 1, stage: 'queue', remainingMs: 0, createdAt: 0 }];
+  state.jobs = [{ id: 1, client: 1, service: 0, stage: 'queue', remainingMs: 0, createdAt: 0 }];
   state.queueDepth = 1;
   state.metricHistory = [{ atMs: 250, sent: 1, completed: 1, rejected: 0, latencySumMs: 3000 }];
   const next = setClientCount(state, 1);

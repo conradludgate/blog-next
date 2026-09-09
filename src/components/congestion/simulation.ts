@@ -16,17 +16,21 @@ export interface ControllerState {
 	gradient2BackoffCooldown: number;
 }
 
-export interface ClientState {
+export interface EndpointState {
+	observed: boolean;
 	controller: ControllerState;
 	tatMs: number;
 	metrics: ClientMetrics;
 }
 
+export interface ClientState {
+	endpoints: EndpointState[];
+	// Keep the same two candidates while admission is blocked: no unlimited resampling.
+	pendingChoices?: number[];
+}
+
 export interface ClientMetrics {
-	sentRate: number;
 	latencyMs: number;
-	sentInWindow: number;
-	sentWindowMs: number;
 }
 
 export interface MetricBucket {
@@ -43,7 +47,7 @@ export interface Job {
 	stage: JobStage;
 	remainingMs: number;
 	createdAt: number;
-	service?: number;
+	service: number;
 	queueSlot?: number;
 }
 
@@ -68,18 +72,17 @@ export interface SimulationState {
 	nowMs: number;
 }
 
-export const SHARED_QUEUE_LIMIT = 16;
+export const WORKER_QUEUE_LIMIT = 4;
 export const MAX_CLIENTS = 8;
 export const MAX_WORKERS = 8;
 export const TICK_MS = 250;
 export const ROUTING_MS = 500;
 export const WORKER_TRAVEL_MS = 350;
 export const BASELINE_LATENCY_MS = 3000;
-export const RATE_PER_CLIENT = 0.5;
-export const FIXED_CONCURRENCY_PER_CLIENT = 4;
+export const RATE_PER_ENDPOINT = 0.5;
+export const FIXED_CONCURRENCY_PER_ENDPOINT = 1;
 export const MAX_CONTROLLER_LIMIT = 16;
 export const METRIC_EWMA_ALPHA = 0.2;
-export const METRIC_SAMPLE_WINDOW_MS = 2000;
 export const DISPLAY_WINDOW_MS = 10000;
 
 // These values are deliberately tuned for the simulator's small, slow system:
@@ -100,8 +103,6 @@ export const GRADIENT2_BACKOFF_COOLDOWN = 8;
 export const GRADIENT2_MAX_LIMIT = 12;
 export const GRADIENT2_CONTROL_INTERVAL_MS = 1000;
 export const GRADIENT2_TARGET_QUEUE = 0.75;
-export const GCRA_STARTUP_RATE = 1;
-export const GCRA_STARTUP_SAMPLES = 8;
 export const GCRA_MAX_RATE = 4;
 
 function createController(kind: ControllerKind): ControllerState {
@@ -109,7 +110,7 @@ function createController(kind: ControllerKind): ControllerState {
 		kind,
 		// Adaptive clients begin with one request so their first RTT samples can
 		// establish an unloaded baseline before they probe for more capacity.
-		limit: kind === "concurrency" ? FIXED_CONCURRENCY_PER_CLIENT : 1,
+		limit: kind === "concurrency" ? FIXED_CONCURRENCY_PER_ENDPOINT : 1,
 		minRtt: Number.POSITIVE_INFINITY,
 		shortRtt: 0,
 		longRtt: 0,
@@ -122,23 +123,25 @@ function createController(kind: ControllerKind): ControllerState {
 	};
 }
 
-function createClient(kind: ControllerKind): ClientState {
+function createEndpoint(kind: ControllerKind): EndpointState {
 	return {
+		observed: false,
 		controller: createController(kind),
 		tatMs: 0,
 		metrics: {
-			sentRate: 0,
 			latencyMs: BASELINE_LATENCY_MS,
-			sentInWindow: 0,
-			sentWindowMs: 0,
 		},
 	};
+}
+
+function createClient(kind: ControllerKind, workers: number): ClientState {
+	return { endpoints: Array.from({ length: workers }, () => createEndpoint(kind)) };
 }
 
 export function createInitialState(strategy: ControllerKind = "rate"): SimulationState {
 	return {
 		strategy,
-		clients: [createClient(strategy)],
+		clients: [createClient(strategy, 4)],
 		workers: 4,
 		serviceMs: 1000,
 		networkMs: 900,
@@ -158,8 +161,19 @@ export function createInitialState(strategy: ControllerKind = "rate"): Simulatio
 	};
 }
 
-function randomWorker(workerCount: number): number {
-	return Math.floor(Math.random() * workerCount);
+export function sampleTwo(workerCount: number): number[] {
+	const first = Math.floor(Math.random() * workerCount);
+	if (workerCount === 1) return [first];
+	const other = Math.floor(Math.random() * (workerCount - 1));
+	return [first, other >= first ? other + 1 : other];
+}
+
+export function chooseEndpoint(endpoints: EndpointState[], inFlights: number[], choices: number[], strategy: ControllerKind, nowMs: number): number | undefined {
+	const ranked = [...choices].sort((a, b) =>
+		(inFlights[a] + 1) * endpoints[a].metrics.latencyMs - (inFlights[b] + 1) * endpoints[b].metrics.latencyMs);
+	return ranked.find((worker) => strategy === "concurrency"
+		? inFlights[worker] < clientLimit(endpoints[worker], strategy)
+		: nowMs >= endpoints[worker].tatMs);
 }
 
 function randomPerformance(): number {
@@ -314,9 +328,9 @@ function updateController(controller: ControllerState, rttMs: number | undefined
 	};
 }
 
-function clientLimit(client: ClientState, strategy: ControllerKind): number {
+function clientLimit(client: EndpointState, strategy: ControllerKind): number {
 	if (strategy === "concurrency") {
-		return FIXED_CONCURRENCY_PER_CLIENT;
+		return FIXED_CONCURRENCY_PER_ENDPOINT;
 	}
 
 	return Math.max(1, Math.floor(client.controller.limit));
@@ -326,33 +340,28 @@ function ewma(previous: number, sample: number, alpha = METRIC_EWMA_ALPHA): numb
 	return previous + alpha * (sample - previous);
 }
 
-function clientRate(client: ClientState, strategy: ControllerKind): number {
+function clientRate(client: EndpointState, strategy: ControllerKind): number {
 	if (strategy === "rate") {
-		return RATE_PER_CLIENT;
+		return RATE_PER_ENDPOINT;
 	}
 	if (strategy === "concurrency") {
 		return 0;
 	}
 
 	const lawRate = client.controller.limit * (1000 / Math.max(client.metrics.latencyMs, 1));
-	const startupProbe = client.controller.warmupSamples < GCRA_STARTUP_SAMPLES ? GCRA_STARTUP_RATE : 0;
-	return clamp(Math.max(lawRate, startupProbe), 0.1, GCRA_MAX_RATE);
+	return clamp(lawRate, 0.1, GCRA_MAX_RATE);
 }
 
-function updateClients(
-	clients: ClientState[],
-	samples: Array<{ client: number; rttMs: number; dropped: boolean }>,
-	sentByClient: number[],
-): ClientState[] {
+function updateEndpoints(
+	clients: EndpointState[],
+	samples: Array<{ service: number; rttMs: number; dropped: boolean }>,
+): EndpointState[] {
 	return clients.map((client, index) => {
-		const clientSamples = samples.filter((sample) => sample.client === index);
+		const clientSamples = samples.filter((sample) => sample.service === index);
 		const successfulSamples = clientSamples.filter((sample) => !sample.dropped);
 		const averageRtt = successfulSamples.length > 0
 			? successfulSamples.reduce((total, sample) => total + sample.rttMs, 0) / successfulSamples.length
 			: client.metrics.latencyMs;
-		const sentInWindow = client.metrics.sentInWindow + sentByClient[index];
-		const sentWindowMs = client.metrics.sentWindowMs + TICK_MS;
-		const hasRateSample = sentWindowMs >= METRIC_SAMPLE_WINDOW_MS;
 		let controller = {
 			...client.controller,
 			gradient2ElapsedMs: client.controller.gradient2ElapsedMs + TICK_MS,
@@ -370,14 +379,10 @@ function updateClients(
 
 		return {
 			...client,
+			observed: client.observed || successfulSamples.length > 0,
 			controller,
 			metrics: {
-				sentRate: hasRateSample
-					? ewma(client.metrics.sentRate, sentInWindow * (1000 / sentWindowMs))
-					: client.metrics.sentRate,
 				latencyMs: successfulSamples.length > 0 ? ewma(client.metrics.latencyMs, averageRtt) : client.metrics.latencyMs,
-				sentInWindow: hasRateSample ? 0 : sentInWindow,
-				sentWindowMs: hasRateSample ? 0 : sentWindowMs,
 			},
 		};
 	});
@@ -389,7 +394,7 @@ export function setStrategy(current: SimulationState, strategy: ControllerKind):
 		...next,
 		workers: current.workers,
 		workerPerformance: current.workerPerformance.slice(0, current.workers),
-		clients: current.clients.map(() => createClient(strategy)),
+		clients: current.clients.map(() => createClient(strategy, current.workers)),
 	};
 }
 
@@ -400,7 +405,7 @@ export function setClientCount(current: SimulationState, count: number): Simulat
 	}
 
 	const resizedClients = current.clients.length < clients
-		? [...current.clients, ...Array.from({ length: clients - current.clients.length }, () => createClient(current.strategy))]
+		? [...current.clients, ...Array.from({ length: clients - current.clients.length }, () => createClient(current.strategy, current.workers))]
 		: current.clients.slice(0, clients);
 	const removedJobs = current.jobs.filter((job) => job.client >= clients);
 	const jobs = current.jobs.filter((job) => job.client < clients);
@@ -417,30 +422,36 @@ export function setWorkerCount(current: SimulationState, count: number): Simulat
 	const workerPerformance = workers > current.workers
 		? [...current.workerPerformance, ...Array.from({ length: workers - current.workers }, randomPerformance)]
 		: current.workerPerformance.slice(0, workers);
-	const jobs = current.jobs.map((job) => (
-		job.service !== undefined && job.service >= workers
-			? { ...job, stage: "network" as const, service: undefined, queueSlot: undefined, remainingMs: current.networkMs }
-			: job
-	));
+	// Removed endpoints fail locally; already assigned jobs never jump queues.
+	const jobs = current.jobs.filter((job) => job.service < workers);
+	const clients = current.clients.map((client) => ({
+		...client,
+		endpoints: workers > current.workers
+			? [...client.endpoints, ...Array.from({ length: workers - current.workers }, () => createEndpoint(current.strategy))]
+			: client.endpoints.slice(0, workers),
+		pendingChoices: client.pendingChoices?.filter((worker) => worker < workers),
+	}));
+	return { ...current, clients, workers, workerPerformance, jobs,
+		cancelled: current.cancelled + current.jobs.length - jobs.length,
+		queueDepth: jobs.filter((job) => job.stage === "queue").length };
 
-	return { ...current, workers, workerPerformance, jobs, queueDepth: jobs.filter((job) => job.stage === "queue").length };
 }
 
 export function advanceSimulation(current: SimulationState): SimulationState {
 	const nowMs = current.nowMs + TICK_MS;
 	const workerPerformance = current.workerPerformance.map(fluctuatePerformance);
-	const completedSamples: Array<{ client: number; rttMs: number; dropped: boolean }> = [];
+	const completedSamples: Array<{ client: number; service: number; rttMs: number; dropped: boolean }> = [];
 	const progressedJobs = current.jobs
 		.map((job): Job | null => {
 			const remainingMs = job.remainingMs - TICK_MS;
 
 			if (job.stage === "service" && remainingMs <= 0) {
-				completedSamples.push({ client: job.client, rttMs: nowMs - job.createdAt, dropped: false });
+				completedSamples.push({ client: job.client, service: job.service, rttMs: nowMs - job.createdAt, dropped: false });
 				return null;
 			}
 
 			if (job.stage === "network" && remainingMs <= 0) {
-				return { ...job, stage: "routing", service: undefined, remainingMs: ROUTING_MS };
+				return { ...job, stage: "routing", remainingMs: ROUTING_MS };
 			}
 
 			if (job.stage === "routing" && remainingMs <= 0) {
@@ -457,9 +468,11 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 
 	let jobs = [...progressedJobs];
 	const waitingJobs = jobs.filter((job) => job.stage === "queue");
-	const rejectedJobs = waitingJobs.slice(SHARED_QUEUE_LIMIT);
+	const rejectedJobs = Array.from({ length: current.workers }, (_, worker) =>
+		waitingJobs.filter((job) => job.service === worker).slice(WORKER_QUEUE_LIMIT)
+	).flat();
 	for (const job of rejectedJobs) {
-		completedSamples.push({ client: job.client, rttMs: nowMs - job.createdAt, dropped: true });
+		completedSamples.push({ client: job.client, service: job.service, rttMs: nowMs - job.createdAt, dropped: true });
 	}
 	const rejectedIds = new Set(rejectedJobs.map((job) => job.id));
 	jobs = jobs.filter((job) => !rejectedIds.has(job.id));
@@ -471,67 +484,52 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 	);
 	const availableWorkers = Array.from({ length: current.workers }, (_, worker) => worker)
 		.filter((worker) => !occupiedWorkers.has(worker));
-	let dispatchedJobs = 0;
-	while (availableWorkers.length > 0) {
-		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue");
-		if (nextJobIndex === -1) {
-			break;
-		}
-
-		const workerPosition = randomWorker(availableWorkers.length);
-		const [worker] = availableWorkers.splice(workerPosition, 1);
+	for (const worker of availableWorkers) {
+		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue" && job.service === worker);
+		if (nextJobIndex === -1) continue;
 		jobs[nextJobIndex] = {
-			...jobs[nextJobIndex],
-			stage: "serviceDispatch",
-			service: worker,
-			queueSlot: dispatchedJobs,
+			...jobs[nextJobIndex], stage: "serviceDispatch", queueSlot: 0,
 			remainingMs: WORKER_TRAVEL_MS,
 		};
-		dispatchedJobs += 1;
 	}
 
-	const sentByClient = current.clients.map(() => 0);
+	const sentByClient = current.clients.map(() => Array(current.workers).fill(0) as number[]);
 	let nextJobId = current.nextJobId;
-	const tats = current.clients.map((client) => client.tatMs);
-	const inFlights = current.clients.map((_, clientIndex) => jobs.filter((job) => job.client === clientIndex).length);
-	let admitted = true;
-	while (admitted) {
-		admitted = false;
-		// Interleave admissions so the shared FIFO reflects fair arrival order rather
-		// than whichever client happens to be first in the array.
-		current.clients.forEach((client, clientIndex) => {
-			const limit = clientLimit(client, current.strategy);
+	const clients = current.clients.map((client, clientIndex) => {
+		const endpoints = updateEndpoints(client.endpoints,
+			completedSamples.filter((sample) => sample.client === clientIndex));
+		return { ...client, endpoints };
+	});
+	// A saturated upstream source waits with one pair of candidates. Each newly
+	// admitted request may sample again, but a blocked request keeps its pair.
+	// Rotate the first client to avoid a permanent array-order tie advantage.
+	for (let offset = 0; offset < clients.length; offset++) {
+		const clientIndex = (offset + Math.floor(nowMs / TICK_MS)) % clients.length;
+		const client = clients[clientIndex];
+		const inFlights = client.endpoints.map((_, worker) => jobs.filter((job) => job.client === clientIndex && job.service === worker).length);
+		for (let attempt = 0; attempt < current.workers * MAX_CONTROLLER_LIMIT; attempt++) {
+			const choices = client.pendingChoices?.length ? client.pendingChoices : sampleTwo(current.workers);
+			const worker = chooseEndpoint(client.endpoints, inFlights, choices, current.strategy, nowMs);
+			if (worker === undefined) {
+				client.pendingChoices = choices;
+				break;
+			}
+			client.pendingChoices = undefined;
+			jobs.push({ id: nextJobId++, client: clientIndex, service: worker, stage: "network", remainingMs: current.networkMs, createdAt: nowMs });
+			sentByClient[clientIndex][worker]++;
+			inFlights[worker]++;
+			const endpoint = client.endpoints[worker];
 			if (current.strategy !== "concurrency") {
-				const intervalMs = 1000 / clientRate(client, current.strategy);
-				// A rate increase should be visible immediately; do not let a previous,
-				// slower TAT postpone the first request at the new rate.
-				if (tats[clientIndex] > nowMs + intervalMs) {
-					tats[clientIndex] = nowMs + intervalMs;
-				}
+				endpoint.tatMs = nowMs + 1000 / clientRate(endpoint, current.strategy);
 			}
-			const shouldSend = current.strategy === "concurrency" ? inFlights[clientIndex] < limit : nowMs >= tats[clientIndex];
-			if (!shouldSend) return;
-
-			jobs.push({ id: nextJobId, client: clientIndex, stage: "network", remainingMs: current.networkMs, createdAt: nowMs });
-			nextJobId += 1;
-			sentByClient[clientIndex] += 1;
-			if (current.strategy === "concurrency") {
-				inFlights[clientIndex] += 1;
-			} else {
-				const intervalMs = 1000 / clientRate(client, current.strategy);
-				tats[clientIndex] = Math.max(tats[clientIndex], current.nowMs) + intervalMs;
-			}
-			admitted = true;
-		});
+		}
 	}
-	const clientsWithJobs = current.clients.map((client, clientIndex) => ({ ...client, tatMs: tats[clientIndex] }));
-	const clients = updateClients(clientsWithJobs, completedSamples, sentByClient);
 
 	const queueDepth = jobs.filter((job) => job.stage === "queue").length;
 	const successfulSamples = completedSamples.filter((sample) => !sample.dropped);
 	const metricHistory = [...current.metricHistory.filter((bucket) => bucket.atMs > nowMs - DISPLAY_WINDOW_MS), {
 		atMs: nowMs,
-		sent: sentByClient.reduce((total, count) => total + count, 0),
+		sent: sentByClient.flat().reduce((total, count) => total + count, 0),
 		completed: successfulSamples.length,
 		rejected: rejectedJobs.length,
 		latencySumMs: successfulSamples.reduce((total, sample) => total + sample.rttMs, 0),

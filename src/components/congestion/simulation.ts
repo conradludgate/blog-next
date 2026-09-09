@@ -25,9 +25,16 @@ export interface ClientState {
 export interface ClientMetrics {
 	sentRate: number;
 	latencyMs: number;
-	rejectionRate: number;
 	sentInWindow: number;
 	sentWindowMs: number;
+}
+
+export interface MetricBucket {
+	atMs: number;
+	sent: number;
+	completed: number;
+	rejected: number;
+	latencySumMs: number;
 }
 
 export interface Job {
@@ -50,7 +57,11 @@ export interface SimulationState {
 	jobs: Job[];
 	nextJobId: number;
 	queueDepth: number;
-	latencyMs: number;
+	latencyMs: number | null;
+	completedRate: number;
+	rejectionRate: number | null;
+	metricHistory: MetricBucket[];
+	cancelled: number;
 	dropped: number;
 	completed: number;
 	sentRate: number;
@@ -63,15 +74,16 @@ export const MAX_WORKERS = 8;
 export const TICK_MS = 250;
 export const ROUTING_MS = 500;
 export const WORKER_TRAVEL_MS = 350;
-export const BASELINE_LATENCY_MS = 2750;
+export const BASELINE_LATENCY_MS = 3000;
 export const RATE_PER_CLIENT = 0.5;
 export const FIXED_CONCURRENCY_PER_CLIENT = 4;
 export const MAX_CONTROLLER_LIMIT = 16;
 export const METRIC_EWMA_ALPHA = 0.2;
 export const METRIC_SAMPLE_WINDOW_MS = 2000;
+export const DISPLAY_WINDOW_MS = 10000;
 
 // These values are deliberately tuned for the simulator's small, slow system:
-// four workers, roughly 4 jobs/s of capacity, and a ~2.75s unloaded RTT.
+// four workers, roughly 2.67 jobs/s including dispatch, and a ~3s unloaded RTT.
 export const VEGAS_SAMPLE_SIZE = 4;
 export const VEGAS_ALPHA = 0.25;
 export const VEGAS_BETA = 0.75;
@@ -117,7 +129,6 @@ function createClient(kind: ControllerKind): ClientState {
 		metrics: {
 			sentRate: 0,
 			latencyMs: BASELINE_LATENCY_MS,
-			rejectionRate: 0,
 			sentInWindow: 0,
 			sentWindowMs: 0,
 		},
@@ -135,7 +146,11 @@ export function createInitialState(strategy: ControllerKind = "rate"): Simulatio
 		jobs: [],
 		nextJobId: 1,
 		queueDepth: 0,
-		latencyMs: BASELINE_LATENCY_MS,
+		latencyMs: null,
+		completedRate: 0,
+		rejectionRate: null,
+		metricHistory: [],
+		cancelled: 0,
 		dropped: 0,
 		completed: 0,
 		sentRate: 0,
@@ -161,13 +176,37 @@ function clamp(value: number, minimum: number, maximum: number): number {
 	return Math.max(minimum, Math.min(maximum, value));
 }
 
-export function serviceCapacity(state: SimulationState, performance = state.workerPerformance): number {
-	const capacity = performance.reduce(
-		(total, factor) => total + 1000 / (state.serviceMs * factor),
-		0,
-	);
+function serviceDurationMs(serviceMs: number, factor: number): number {
+	return Math.max(100, Math.round(serviceMs * factor));
+}
 
-	return Math.max(1, Math.floor(capacity));
+function tickDuration(milliseconds: number): number {
+	return Math.ceil(milliseconds / TICK_MS) * TICK_MS;
+}
+
+export function serviceCapacity(state: SimulationState, performance = state.workerPerformance): number {
+	// Dispatch reserves a worker. Both dispatch and processing advance in whole
+	// ticks; inbound network/routing can overlap work and do not reserve it.
+	return performance.reduce((total, factor) => total + 1000 / (
+		tickDuration(WORKER_TRAVEL_MS) + tickDuration(serviceDurationMs(state.serviceMs, factor))
+	), 0);
+}
+
+export function summarizeMetrics(history: MetricBucket[], nowMs: number) {
+	const durationMs = Math.min(nowMs, DISPLAY_WINDOW_MS);
+	const totals = history.reduce((sum, bucket) => ({
+		sent: sum.sent + bucket.sent,
+		completed: sum.completed + bucket.completed,
+		rejected: sum.rejected + bucket.rejected,
+		latencySumMs: sum.latencySumMs + bucket.latencySumMs,
+	}), { sent: 0, completed: 0, rejected: 0, latencySumMs: 0 });
+	const outcomes = totals.completed + totals.rejected;
+	return {
+		sentRate: durationMs > 0 ? totals.sent * 1000 / durationMs : 0,
+		completedRate: durationMs > 0 ? totals.completed * 1000 / durationMs : 0,
+		rejectionRate: outcomes > 0 ? totals.rejected / outcomes : null,
+		latencyMs: totals.completed > 0 ? totals.latencySumMs / totals.completed : null,
+	};
 }
 
 function updateController(controller: ControllerState, rttMs: number | undefined, dropped: boolean): ControllerState {
@@ -175,7 +214,7 @@ function updateController(controller: ControllerState, rttMs: number | undefined
 		return controller;
 	}
 
-	const hasRttSample = rttMs !== undefined && Number.isFinite(rttMs);
+	const hasRttSample = !dropped && rttMs !== undefined && Number.isFinite(rttMs);
 	const next = {
 		...controller,
 		minRtt: hasRttSample ? Math.min(controller.minRtt, rttMs) : controller.minRtt,
@@ -308,12 +347,9 @@ function updateClients(
 	return clients.map((client, index) => {
 		const clientSamples = samples.filter((sample) => sample.client === index);
 		const successfulSamples = clientSamples.filter((sample) => !sample.dropped);
-		const droppedCount = clientSamples.length - successfulSamples.length;
 		const averageRtt = successfulSamples.length > 0
 			? successfulSamples.reduce((total, sample) => total + sample.rttMs, 0) / successfulSamples.length
 			: client.metrics.latencyMs;
-		const requestCount = clientSamples.length;
-		const rejectionRate = requestCount > 0 ? droppedCount / requestCount : 0;
 		const sentInWindow = client.metrics.sentInWindow + sentByClient[index];
 		const sentWindowMs = client.metrics.sentWindowMs + TICK_MS;
 		const hasRateSample = sentWindowMs >= METRIC_SAMPLE_WINDOW_MS;
@@ -340,7 +376,6 @@ function updateClients(
 					? ewma(client.metrics.sentRate, sentInWindow * (1000 / sentWindowMs))
 					: client.metrics.sentRate,
 				latencyMs: successfulSamples.length > 0 ? ewma(client.metrics.latencyMs, averageRtt) : client.metrics.latencyMs,
-				rejectionRate: ewma(client.metrics.rejectionRate, rejectionRate),
 				sentInWindow: hasRateSample ? 0 : sentInWindow,
 				sentWindowMs: hasRateSample ? 0 : sentWindowMs,
 			},
@@ -370,7 +405,7 @@ export function setClientCount(current: SimulationState, count: number): Simulat
 	const removedJobs = current.jobs.filter((job) => job.client >= clients);
 	const jobs = current.jobs.filter((job) => job.client < clients);
 
-	return { ...current, clients: resizedClients, jobs, dropped: current.dropped + removedJobs.length };
+	return { ...current, clients: resizedClients, jobs, cancelled: current.cancelled + removedJobs.length, queueDepth: jobs.filter((job) => job.stage === "queue").length };
 }
 
 export function setWorkerCount(current: SimulationState, count: number): SimulationState {
@@ -413,7 +448,7 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 			}
 
 			if (job.stage === "serviceDispatch" && remainingMs <= 0) {
-				return { ...job, stage: "service", remainingMs: Math.max(100, Math.round(current.serviceMs * workerPerformance[job.service ?? 0])) };
+				return { ...job, stage: "service", remainingMs: serviceDurationMs(current.serviceMs, workerPerformance[job.service ?? 0]) };
 			}
 
 			return { ...job, remainingMs };
@@ -493,8 +528,14 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 	const clients = updateClients(clientsWithJobs, completedSamples, sentByClient);
 
 	const queueDepth = jobs.filter((job) => job.stage === "queue").length;
-	const sentRate = clients.reduce((total, client) => total + client.metrics.sentRate, 0);
-	const latencyMs = clients.reduce((total, client) => total + client.metrics.latencyMs, 0) / clients.length;
+	const successfulSamples = completedSamples.filter((sample) => !sample.dropped);
+	const metricHistory = [...current.metricHistory.filter((bucket) => bucket.atMs > nowMs - DISPLAY_WINDOW_MS), {
+		atMs: nowMs,
+		sent: sentByClient.reduce((total, count) => total + count, 0),
+		completed: successfulSamples.length,
+		rejected: rejectedJobs.length,
+		latencySumMs: successfulSamples.reduce((total, sample) => total + sample.rttMs, 0),
+	}];
 
 	return {
 		...current,
@@ -503,10 +544,10 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 		jobs,
 		nextJobId,
 		queueDepth,
-		latencyMs,
+		metricHistory,
+		...summarizeMetrics(metricHistory, nowMs),
 		dropped: current.dropped + rejectedJobs.length,
 		completed: current.completed + completedSamples.filter((sample) => !sample.dropped).length,
-		sentRate,
 		nowMs,
 	};
 }

@@ -55,10 +55,10 @@ export default function CongestionSimulator() {
 	const [isRunning, setIsRunning] = useState(true);
 	const [state, setState] = useState<SimulationState>(() => createInitialState());
 	const metrics = useMemo(() => ({
-		rejectionRate: state.clients.reduce((total, client) => total + client.metrics.rejectionRate, 0) / state.clients.length,
+		rejectionRate: state.rejectionRate,
 		capacity: serviceCapacity(state),
 	}), [state]);
-	const isRejecting = metrics.rejectionRate > 0.005;
+	const isRejecting = (metrics.rejectionRate ?? 0) > 0.005;
 	const status = isRejecting
 		? "Rejecting work"
 		: state.queueDepth > 0
@@ -171,7 +171,7 @@ export default function CongestionSimulator() {
 					</div>
 					<div className={styles.CapacitySummary}>
 						<span>Estimated capacity</span>
-						<strong>{metrics.capacity} jobs/s</strong>
+						<strong>{formatMetricValue(metrics.capacity)} jobs/s</strong>
 					</div>
 				</div>
 				<PixiCongestionScene state={state} />
@@ -184,14 +184,14 @@ export default function CongestionSimulator() {
 			</div>
 
 			<div className={styles.Metrics}>
-				<div><span><b>Rate</b> Offered load</span><strong>{formatMetricValue(state.sentRate)}/s</strong></div>
-				<div className={isRejecting ? styles.MetricWarning : ""}><span><b>Errors</b> Rejected</span><strong>{formatMetricValue(metrics.rejectionRate * 100)}%</strong></div>
-				<div className={state.latencyMs > 4000 ? styles.MetricWarning : ""}><span><b>Duration</b> Round trip</span><strong>{formatLatency(state.latencyMs)}</strong></div>
+				<div><span><b>Rate</b> Completed / offered</span><strong>{formatMetricValue(state.completedRate)} / {formatMetricValue(state.sentRate)}/s</strong></div>
+				<div className={isRejecting ? styles.MetricWarning : ""}><span><b>Errors</b> Rejected</span><strong>{metrics.rejectionRate === null ? "—" : `${formatMetricValue(metrics.rejectionRate * 100)}%`}</strong></div>
+				<div className={(state.latencyMs ?? 0) > 4000 ? styles.MetricWarning : ""}><span><b>Duration</b> Mean successful RTT</span><strong>{state.latencyMs === null ? "—" : formatLatency(state.latencyMs)}</strong></div>
 				<div className={state.queueDepth > 0 ? styles.MetricWarning : ""}><span><b>Saturation</b> Waiting</span><strong>{state.queueDepth}</strong></div>
 			</div>
 
 			<div className={styles.Footer}>
-				<p>Each dot is one request. The queue is bounded, so excess work is rejected instead of waiting forever.</p>
+				<p>Each dot is one request. Rates and outcomes cover the last 10 seconds (since reset during startup). Rejection is the share of finished attempts rejected by the queue; latency measures successful requests. A dash means no samples.</p>
 				<button type="button" className={styles.Reset} onClick={reset}>Start over</button>
 			</div>
 		</section>

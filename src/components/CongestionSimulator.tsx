@@ -7,7 +7,6 @@ import { createConditionProgress, updateConditionProgress } from "./congestion/c
 import PixiCongestionScene from "./congestion/PixiCongestionScene";
 import {
 	advanceSimulation,
-	FIXED_CONCURRENCY_PER_ENDPOINT,
 	MAX_CLIENTS,
 	MAX_WORKERS,
 	RATE_PER_ENDPOINT,
@@ -22,13 +21,13 @@ import {
 import type { CongestionChallengeId } from "./congestion/challenges";
 import type { ControllerKind, SimulationState } from "./congestion/simulation";
 
-const CONTROLLER_OPTIONS: Array<{ kind: ControllerKind; label: string }> = [
-	{ kind: "rate", label: "Rate" },
-	{ kind: "concurrency", label: "Concurrency" },
-	{ kind: "aimd", label: "AIMD" },
-	{ kind: "vegas", label: "Vegas" },
-	{ kind: "gradient2", label: "Gradient2" },
-];
+const CONTROLLER_LABELS: Record<ControllerKind, string> = {
+	rate: "Rate",
+	concurrency: "Concurrency",
+	aimd: "AIMD",
+	vegas: "Vegas",
+	gradient2: "Gradient2",
+};
 
 function formatMetricValue(value: number): string {
 	if (!Number.isFinite(value) || value === 0) return "0";
@@ -52,6 +51,7 @@ function formatLatency(milliseconds: number): string {
 export default function CongestionSimulator({ challenge: challengeId }: { challenge: CongestionChallengeId }) {
 	const challenge = CONGESTION_CHALLENGES[challengeId];
 	const [isRunning, setIsRunning] = useState(false);
+	const [playbackSpeed, setPlaybackSpeed] = useState<1 | 0.5>(1);
 	const [state, setState] = useState<SimulationState>(() => createChallenge(challengeId));
 	const [conditionProgress, setConditionProgress] = useState(() => createConditionProgress(challenge.conditions));
 	const stateRef = useRef(state);
@@ -64,21 +64,12 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 	const conditionsComplete = challenge.conditions.every((condition) =>
 		(conditionProgress[condition.id]?.completedAtMs ?? null) !== null);
 	const isRejecting = (metrics.rejectionRate ?? 0) > 0.005;
-	const status = isRejecting
-		? "Rejecting work"
-		: state.queueDepth > 0
-			? `${state.queueDepth} waiting`
-			: "Queue empty";
+	const status = state.nowMs === 0 ? "Ready" : isRejecting ? "Rejecting" : state.queueDepth > 0 ? `${state.queueDepth} queued` : "Healthy";
 
 	function commitState(next: SimulationState) {
 		stateRef.current = next;
 		setState(next);
-		setConditionProgress((current) => updateConditionProgress(
-			challenge.conditions,
-			current,
-			next,
-			baselineRef.current,
-		));
+		setConditionProgress((current) => updateConditionProgress(challenge.conditions, current, next, baselineRef.current));
 	}
 
 	useEffect(() => {
@@ -87,27 +78,10 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 			const next = advanceSimulation(stateRef.current);
 			stateRef.current = next;
 			setState(next);
-			setConditionProgress((current) => updateConditionProgress(
-				challenge.conditions,
-				current,
-				next,
-				baselineRef.current,
-			));
-		}, TICK_MS);
+			setConditionProgress((current) => updateConditionProgress(challenge.conditions, current, next, baselineRef.current));
+		}, TICK_MS / playbackSpeed);
 		return () => window.clearInterval(timer);
-	}, [isRunning, challenge]);
-
-	function changeStrategy(strategy: ControllerKind) {
-		commitState(setSimulationStrategy(stateRef.current, strategy));
-	}
-
-	function changeClients(delta: number) {
-		commitState(setClientCount(stateRef.current, stateRef.current.clients.length + delta));
-	}
-
-	function changeWorkers(delta: number) {
-		commitState(setWorkerCount(stateRef.current, stateRef.current.workers + delta));
-	}
+	}, [isRunning, playbackSpeed, challenge]);
 
 	function reset() {
 		const next = createChallenge(challengeId);
@@ -116,132 +90,115 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 		setState(next);
 		setConditionProgress(createConditionProgress(challenge.conditions));
 		setIsRunning(false);
+		setPlaybackSpeed(1);
 	}
 
+	const controllerOptions = challenge.controls.controllerOptions;
+
 	return (
-		<section className={styles.Simulator} aria-labelledby={`congestion-simulator-${challengeId}`}>
-			<div className={styles.Header}>
-				<div>
-					<p className={styles.Eyebrow}>Interactive experiment</p>
-					<h3 id={`congestion-simulator-${challengeId}`}>{challenge.title}</h3>
-				</div>
-				<div className={styles.HeaderControls}>
-					<span className={styles.Clock}>t = {formatMetricValue(state.nowMs / 1000)}s</span>
-					<button
-						type="button"
-						className={styles.Play}
-						aria-pressed={isRunning}
-						onClick={() => setIsRunning((running) => !running)}
-					>
-						{isRunning ? "Pause" : "Run"}
-					</button>
-					<span className={state.queueDepth > 0 || isRejecting ? styles.Warning : styles.Healthy}>{status}</span>
-				</div>
-			</div>
-
-			<div className={styles.Challenge}>
-				<div>
-					<span className={styles.ChallengeLabel}>{conditionsComplete ? "Experiment complete" : "Your task"}</span>
-					<p>{challenge.introduction} <strong>{challenge.task}</strong></p>
-				</div>
-				<button className={styles.Reset} type="button" onClick={reset}>Reset experiment</button>
-			</div>
-
-			<ul className={styles.Conditions} aria-label="Experiment checks" aria-live="polite">
-				{challenge.conditions.map((condition) => {
-					const completed = (conditionProgress[condition.id]?.completedAtMs ?? null) !== null;
-					return <li className={completed ? styles.ConditionComplete : ""} key={condition.id}>
-						<span aria-hidden="true">{completed ? "✓" : "○"}</span>
-						<div><strong>{condition.label}</strong><small>{condition.description}</small></div>
-					</li>;
-				})}
-			</ul>
-
-			<div className={styles.ControllerRow}>
-				<span className={styles.ControllerLabel}>Clients send using</span>
-				<select className={styles.MobileController} aria-label="Choose how clients send work" value={state.strategy} onChange={(event) => changeStrategy(event.target.value as ControllerKind)}>
-					{CONTROLLER_OPTIONS.map((option) => <option value={option.kind} key={option.kind}>{option.label}</option>)}
-				</select>
-				<div className={styles.ModeSwitcher} role="group" aria-label="Choose how clients send work">
-					{CONTROLLER_OPTIONS.map((option) => (
-						<button
-							type="button"
-							className={state.strategy === option.kind ? styles.Selected : ""}
-							aria-pressed={state.strategy === option.kind}
-							onClick={() => changeStrategy(option.kind)}
-							key={option.kind}
-						>
-							{option.label}
-						</button>
-					))}
-				</div>
-			</div>
-
-			<p className={styles.Description} aria-live="polite">
-				{state.strategy === "rate" && `${RATE_PER_ENDPOINT} requests per second per client–worker pair. Every client uses Power of Two to choose a destination.`}
-				{state.strategy === "concurrency" && `${FIXED_CONCURRENCY_PER_ENDPOINT} request in flight per client–worker pair. Each worker has its own admission limit.`}
-				{state.strategy === "aimd" && "Increase after success; halve the window only after the queue rejects work."}
-				{state.strategy === "vegas" && "Estimate queueing delay and back off before the queue reaches its limit."}
-				{state.strategy === "gradient2" && "Compare short- and long-term latency, following changes in service capacity."}
-			</p>
-
+		<section className={styles.Simulator} aria-label={`${challenge.title} simulator`}>
 			<div className={styles.SceneFrame}>
-				<div className={styles.SceneControls}>
+				<div className={styles.Task}>
+					<span>{conditionsComplete ? "Complete" : "Goal"}</span>
+					<strong>{challenge.task}</strong>
+				</div>
+
+				<ul className={styles.Conditions} aria-label="Experiment checks" aria-live="polite">
+					{challenge.conditions.map((condition) => {
+						const completed = (conditionProgress[condition.id]?.completedAtMs ?? null) !== null;
+						return <li
+							className={completed ? styles.ConditionComplete : ""}
+							key={condition.id}
+							title={condition.description}
+							aria-label={`${condition.label}: ${condition.description}`}
+						>
+							<span aria-hidden="true">{completed ? "✓" : "○"}</span>
+							<strong>{condition.label}</strong>
+						</li>;
+					})}
+				</ul>
+
+				<div className={styles.Toolbar}>
+					<div className={styles.PlaybackRow}>
+						<div className={styles.Playback} role="group" aria-label="Simulation playback">
+							<button type="button" className={styles.Play} aria-pressed={isRunning} onClick={() => setIsRunning((running) => !running)}>
+								{isRunning ? "Pause" : "Run"}
+							</button>
+							<button type="button" aria-label="Slow playback to half speed" className={playbackSpeed === 0.5 ? styles.Selected : ""} aria-pressed={playbackSpeed === 0.5} onClick={() => setPlaybackSpeed((speed) => speed === 1 ? 0.5 : 1)}>
+								½ speed
+							</button>
+							<button type="button" onClick={reset}>Reset</button>
+						</div>
+						<div className={styles.RunState}>
+							<span className={styles.Clock}>{formatMetricValue(state.nowMs / 1000)}s</span>
+							<span className={state.queueDepth > 0 || isRejecting ? styles.Warning : styles.Healthy}>{status}</span>
+						</div>
+					</div>
+
 					<div className={styles.ControlSets}>
 						<div className={styles.ControlSet}>
-							<span className={styles.ControlLabel}>Clients <strong>{state.clients.length}</strong></span>
-							<div className={styles.Stepper}>
-								<button type="button" aria-label="Remove client" disabled={state.clients.length === 1} onClick={() => changeClients(-1)}>−</button>
-								<button type="button" aria-label="Add client" disabled={state.clients.length === MAX_CLIENTS} onClick={() => changeClients(1)}>+</button>
-							</div>
+							<span>Controller</span>
+							{controllerOptions
+								? <select aria-label="Controller" value={state.strategy} onChange={(event) => commitState(setSimulationStrategy(stateRef.current, event.target.value as ControllerKind))}>
+									{controllerOptions.map((kind) => <option value={kind} key={kind}>{CONTROLLER_LABELS[kind]}</option>)}
+								</select>
+								: <strong>{CONTROLLER_LABELS[state.strategy]}</strong>}
 						</div>
 						<div className={styles.ControlSet}>
-							<span className={styles.ControlLabel}>Workers <strong>{state.workers}</strong></span>
-							<div className={styles.Stepper}>
-								<button type="button" aria-label="Remove worker" disabled={state.workers === 1} onClick={() => changeWorkers(-1)}>−</button>
-								<button type="button" aria-label="Add worker" disabled={state.workers === MAX_WORKERS} onClick={() => changeWorkers(1)}>+</button>
-							</div>
+							<span>Clients</span><strong>{state.clients.length}</strong>
+							{challenge.controls.clients && <div className={styles.Stepper}>
+								<button type="button" aria-label="Remove client" disabled={state.clients.length === 1} onClick={() => commitState(setClientCount(stateRef.current, stateRef.current.clients.length - 1))}>−</button>
+								<button type="button" aria-label="Add client" disabled={state.clients.length === MAX_CLIENTS} onClick={() => commitState(setClientCount(stateRef.current, stateRef.current.clients.length + 1))}>+</button>
+							</div>}
+						</div>
+						<div className={styles.ControlSet}>
+							<span>Workers</span><strong>{state.workers}</strong>
+							{challenge.controls.workers && <div className={styles.Stepper}>
+								<button type="button" aria-label="Remove worker" disabled={state.workers === 1} onClick={() => commitState(setWorkerCount(stateRef.current, stateRef.current.workers - 1))}>−</button>
+								<button type="button" aria-label="Add worker" disabled={state.workers === MAX_WORKERS} onClick={() => commitState(setWorkerCount(stateRef.current, stateRef.current.workers + 1))}>+</button>
+							</div>}
+						</div>
+						<div className={styles.ControlSet}>
+							<span>Service time</span>
+							{challenge.controls.processingTime
+								? <div className={styles.Choice} role="group" aria-label="Processing time">
+									<button type="button" className={state.serviceMs === 1000 ? styles.Selected : ""} aria-pressed={state.serviceMs === 1000} onClick={() => commitState({ ...stateRef.current, serviceMs: 1000 })}>1s</button>
+									<button type="button" className={state.serviceMs === 3000 ? styles.Selected : ""} aria-pressed={state.serviceMs === 3000} onClick={() => commitState({ ...stateRef.current, serviceMs: 3000 })}>3s</button>
+								</div>
+								: <strong>{state.serviceMs / 1000}s</strong>}
 						</div>
 					</div>
-					<label className={styles.ControlLabel}>Processing time
-						<select className={styles.ProcessingTime} value={state.serviceMs} onChange={(event) => commitState({ ...stateRef.current, serviceMs: Number(event.target.value) })}>
-							<option value={1000}>Normal</option><option value={3000}>3× slower</option>
-						</select>
-					</label>
-					<div className={styles.CapacitySummary}>
-						<span>{state.serviceMs === 3000 ? "Slower workers · capacity" : "Estimated capacity"}</span>
-						<strong>{formatMetricValue(metrics.capacity)} jobs/s</strong>
-					</div>
+
 				</div>
-				<PixiCongestionScene state={state} running={isRunning} />
+
+				<PixiCongestionScene state={state} running={isRunning} playbackSpeed={playbackSpeed} />
 				<p className={styles.ScreenReaderSummary}>There are {state.clients.length} clients, {state.workers} workers, and {state.queueDepth} jobs waiting. {state.dropped} jobs have been rejected.</p>
 				<div className={styles.QueueMeter}>
-					<span>Total queued</span>
+					<span>Queue</span>
 					<div className={styles.QueueTrack} aria-hidden="true"><i style={{ width: `${state.queueDepth / (state.workers * WORKER_QUEUE_LIMIT) * 100}%` }} /></div>
-					<strong>{state.queueDepth} / {state.workers * WORKER_QUEUE_LIMIT}</strong>
+					<strong>{state.queueDepth}/{state.workers * WORKER_QUEUE_LIMIT}</strong>
 				</div>
 			</div>
 
 			<div className={styles.Metrics} aria-label="RED and USE metrics">
-				<div><span><b>Rate</b> Completed / offered</span><strong>{formatMetricValue(state.completedRate)} / {formatMetricValue(state.sentRate)}/s</strong></div>
-				<div className={isRejecting ? styles.MetricWarning : ""}><span><b>Errors</b> Rejected</span><strong>{metrics.rejectionRate === null ? "—" : `${formatMetricValue(metrics.rejectionRate * 100)}%`}</strong></div>
-				<div className={(state.p99LatencyMs ?? 0) > 4000 ? styles.MetricWarning : ""}><span><b>Duration</b> p50 / p99 RTT</span><strong>{state.p50LatencyMs === null ? "—" : `${formatLatency(state.p50LatencyMs)} / ${formatLatency(state.p99LatencyMs ?? state.p50LatencyMs)}`}</strong></div>
-				<div><span><b>Utilisation</b> Busy worker time</span><strong>{formatMetricValue(state.utilisation * 100)}%</strong></div>
-				<div className={state.queueDepth > 0 ? styles.MetricWarning : ""}><span><b>Saturation</b> Waiting</span><strong>{state.queueDepth}</strong></div>
+				<div><span>Completed / offered</span><strong>{formatMetricValue(state.completedRate)} / {formatMetricValue(state.sentRate)}/s</strong></div>
+				<div className={isRejecting ? styles.MetricWarning : ""}><span>Rejected</span><strong>{metrics.rejectionRate === null ? "—" : `${formatMetricValue(metrics.rejectionRate * 100)}%`}</strong></div>
+				<div className={(state.p99LatencyMs ?? 0) > 4000 ? styles.MetricWarning : ""}><span>p50 / p99</span><strong>{state.p50LatencyMs === null ? "—" : `${formatLatency(state.p50LatencyMs)} / ${formatLatency(state.p99LatencyMs ?? state.p50LatencyMs)}`}</strong></div>
+				<div><span>Workers busy</span><strong>{formatMetricValue(state.utilisation * 100)}%</strong></div>
+				<div className={state.queueDepth > 0 ? styles.MetricWarning : ""}><span>Queued</span><strong>{state.queueDepth}</strong></div>
 			</div>
 
 			<details className={styles.EndpointDetails}>
-				<summary>Inspect client–worker controllers</summary>
-				<p>Each client keeps its own latency estimate and limit for each worker. The source waits when both sampled workers have no admission budget.</p>
+				<summary>Details</summary>
 				<div className={styles.EndpointTable}>
-					<p>Client fairness: <strong>{breakdown.clientThroughputFairness === null ? "—" : formatMetricValue(breakdown.clientThroughputFairness)}</strong> · Worker fairness: <strong>{breakdown.workerThroughputFairness === null ? "—" : formatMetricValue(breakdown.workerThroughputFairness)}</strong></p>
+					<p>Capacity <strong>{formatMetricValue(metrics.capacity)}/s</strong> · Client fairness <strong>{breakdown.clientThroughputFairness === null ? "—" : formatMetricValue(breakdown.clientThroughputFairness)}</strong> · Worker fairness <strong>{breakdown.workerThroughputFairness === null ? "—" : formatMetricValue(breakdown.workerThroughputFairness)}</strong></p>
 					<table>
-						<thead><tr><th>Client</th><th>Completed</th><th>Rejected</th><th>p99 RTT</th></tr></thead>
-						<tbody>{breakdown.byClient.map((client, index) => <tr key={index}><th scope="row">Client {index + 1}</th><td>{formatMetricValue(client.completedRate)}/s</td><td>{client.rejectionRate === null ? "—" : `${formatMetricValue(client.rejectionRate * 100)}%`}</td><td>{client.p99LatencyMs === null ? "—" : formatLatency(client.p99LatencyMs)}</td></tr>)}</tbody>
+						<thead><tr><th>Client</th><th>Completed</th><th>Rejected</th><th>p99</th></tr></thead>
+						<tbody>{breakdown.byClient.map((client, index) => <tr key={index}><th scope="row">{index + 1}</th><td>{formatMetricValue(client.completedRate)}/s</td><td>{client.rejectionRate === null ? "—" : `${formatMetricValue(client.rejectionRate * 100)}%`}</td><td>{client.p99LatencyMs === null ? "—" : formatLatency(client.p99LatencyMs)}</td></tr>)}</tbody>
 					</table>
 					<table>
-						<thead><tr><th>Worker</th><th>Completed</th><th>Utilisation</th><th>p99 RTT</th></tr></thead>
-						<tbody>{breakdown.byWorker.map((worker, index) => <tr key={index}><th scope="row">Worker {index + 1}</th><td>{formatMetricValue(worker.completedRate)}/s</td><td>{formatMetricValue(worker.utilisation * 100)}%</td><td>{worker.p99LatencyMs === null ? "—" : formatLatency(worker.p99LatencyMs)}</td></tr>)}</tbody>
+						<thead><tr><th>Worker</th><th>Completed</th><th>Busy</th><th>p99</th></tr></thead>
+						<tbody>{breakdown.byWorker.map((worker, index) => <tr key={index}><th scope="row">{index + 1}</th><td>{formatMetricValue(worker.completedRate)}/s</td><td>{formatMetricValue(worker.utilisation * 100)}%</td><td>{worker.p99LatencyMs === null ? "—" : formatLatency(worker.p99LatencyMs)}</td></tr>)}</tbody>
 					</table>
 					<table>
 						<thead><tr><th>Client → worker</th><th>In flight</th><th>Limit</th><th>RTT</th></tr></thead>
@@ -256,10 +213,6 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 					</table>
 				</div>
 			</details>
-			<div className={styles.Footer}>
-				<p>Each dot is one request. Rates and outcomes cover the last 10 seconds. Rejection is the share of finished attempts rejected by the queue; duration measures successful requests. A dash means no samples.</p>
-				<button type="button" className={styles.Reset} onClick={reset}>Reset experiment</button>
-			</div>
 		</section>
 	);
 }

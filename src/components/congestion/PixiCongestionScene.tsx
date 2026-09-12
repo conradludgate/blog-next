@@ -32,6 +32,7 @@ class PixiScene {
 	private queues: Point[] = [];
 	private mobile = false;
 	private reduceMotion = false;
+	private playbackSpeed = 1;
 
 	constructor(private readonly app: Application, state: SimulationState) {
 		this.state = state;
@@ -139,7 +140,7 @@ class PixiScene {
 	}
 	tick(delta: number) {
 		for (const view of this.jobs.values()) {
-			view.progress = this.reduceMotion ? 1 : Math.min(1, view.progress + delta / TICK_MS);
+			view.progress = this.reduceMotion ? 1 : Math.min(1, view.progress + delta * this.playbackSpeed / TICK_MS);
 			view.container.position.copyFrom(interpolate(view.from, view.to, view.progress));
 		}
 		this.app.render();
@@ -156,17 +157,20 @@ class PixiScene {
 		}
 		this.app.render();
 	}
+	setPlaybackSpeed(speed: number) { this.playbackSpeed = speed; }
 	resize(width: number, height: number) { this.app.renderer.resize(width, height); this.update(this.state); }
 	destroy() { this.app.ticker.stop(); this.app.destroy({ removeView: true }, { children: true }); }
 }
 
-export default function PixiCongestionScene({ state, running }: { state: SimulationState; running: boolean }) {
+export default function PixiCongestionScene({ state, running, playbackSpeed }: { state: SimulationState; running: boolean; playbackSpeed: number }) {
 	const hostRef = useRef<HTMLDivElement>(null);
 	const stateRef = useRef(state);
 	const runningRef = useRef(running);
+	const playbackSpeedRef = useRef(playbackSpeed);
 	const sceneRef = useRef<PixiScene | undefined>(undefined);
 	useEffect(() => { stateRef.current = state; }, [state]);
 	useEffect(() => { runningRef.current = running; sceneRef.current?.setRunning(running); }, [running]);
+	useEffect(() => { playbackSpeedRef.current = playbackSpeed; sceneRef.current?.setPlaybackSpeed(playbackSpeed); }, [playbackSpeed]);
 	useEffect(() => {
 		const host = hostRef.current;
 		if (!host) return;
@@ -181,6 +185,7 @@ export default function PixiCongestionScene({ state, running }: { state: Simulat
 			host.appendChild(app.canvas);
 			const scene = new PixiScene(app, stateRef.current);
 			sceneRef.current = scene;
+			scene.setPlaybackSpeed(playbackSpeedRef.current);
 			scene.update(stateRef.current);
 			app.ticker.add((ticker) => scene.tick(ticker.deltaMS));
 			scene.setRunning(runningRef.current);

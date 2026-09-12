@@ -39,6 +39,14 @@ export interface MetricBucket {
 	completed: number;
 	rejected: number;
 	latencySumMs: number;
+	endpoints?: EndpointMetricBucket[][];
+}
+
+export interface EndpointMetricBucket {
+	sent: number;
+	completed: number;
+	rejected: number;
+	latencySumMs: number;
 }
 
 export interface Job {
@@ -529,12 +537,23 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 
 	const queueDepth = jobs.filter((job) => job.stage === "queue").length;
 	const successfulSamples = completedSamples.filter((sample) => !sample.dropped);
+	const endpointMetrics = current.clients.map((client, clientIndex) => client.endpoints.map((_, worker) => {
+		const successful = successfulSamples.filter((sample) => sample.client === clientIndex && sample.service === worker);
+		const rejected = rejectedJobs.filter((job) => job.client === clientIndex && job.service === worker);
+		return {
+			sent: sentByClient[clientIndex][worker],
+			completed: successful.length,
+			rejected: rejected.length,
+			latencySumMs: successful.reduce((total, sample) => total + sample.rttMs, 0),
+		};
+	}));
 	const metricHistory = [...current.metricHistory.filter((bucket) => bucket.atMs > nowMs - DISPLAY_WINDOW_MS), {
 		atMs: nowMs,
 		sent: sentByClient.flat().reduce((total, count) => total + count, 0),
 		completed: successfulSamples.length,
 		rejected: rejectedJobs.length,
 		latencySumMs: successfulSamples.reduce((total, sample) => total + sample.rttMs, 0),
+		endpoints: endpointMetrics,
 	}];
 
 	return {

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "@/styles/CongestionSimulator.module.css";
 import { LESSONS, createLesson, applyLessonAction } from "./congestion/lessons";
+import { createConditionProgress, updateConditionProgress } from "./congestion/conditions";
 import PixiCongestionScene from "./congestion/PixiCongestionScene";
 import {
 	advanceSimulation,
@@ -58,7 +59,13 @@ export default function CongestionSimulator() {
 	const [lessonIndex, setLessonIndex] = useState(0);
 	const [guided, setGuided] = useState(true);
 	const [acted, setActed] = useState(false);
+	const [conditionProgress, setConditionProgress] = useState(() => createConditionProgress(LESSONS[0].conditions));
 	const lesson = LESSONS[lessonIndex];
+	const stateRef = useRef(state);
+	const lessonRef = useRef(lesson);
+	const guidedRef = useRef(guided);
+	const actedRef = useRef(acted);
+	const conditionBaselineRef = useRef<SimulationState>(createLesson(0));
 	const metrics = useMemo(() => ({
 		rejectionRate: state.rejectionRate,
 		capacity: serviceCapacity(state),
@@ -76,41 +83,78 @@ export default function CongestionSimulator() {
 		}
 
 		const timer = window.setInterval(() => {
-			setState((current) => advanceSimulation(current));
+			const next = advanceSimulation(stateRef.current);
+			stateRef.current = next;
+			setState(next);
+			if (guidedRef.current) {
+				setConditionProgress((current) => updateConditionProgress(
+					lessonRef.current.conditions,
+					current,
+					next,
+					conditionBaselineRef.current,
+					actedRef.current,
+				));
+			}
 		}, TICK_MS);
 
 		return () => window.clearInterval(timer);
 	}, [isRunning]);
 
 	function changeStrategy(strategy: ControllerKind) {
-		setState((current) => setSimulationStrategy(current, strategy));
+		const next = setSimulationStrategy(stateRef.current, strategy);
+		stateRef.current = next;
+		setState(next);
 	}
 
 	function changeClients(delta: number) {
-		setState((current) => setClientCount(current, current.clients.length + delta));
+		const next = setClientCount(stateRef.current, stateRef.current.clients.length + delta);
+		stateRef.current = next;
+		setState(next);
 	}
 
 	function changeWorkers(delta: number) {
-		setState((current) => setWorkerCount(current, current.workers + delta));
+		const next = setWorkerCount(stateRef.current, stateRef.current.workers + delta);
+		stateRef.current = next;
+		setState(next);
 	}
 
 	function loadLesson(index: number) {
+		const next = createLesson(index);
 		setLessonIndex(index);
-		setState(createLesson(index));
+		lessonRef.current = LESSONS[index];
+		setState(next);
+		stateRef.current = next;
+		conditionBaselineRef.current = next;
+		setConditionProgress(createConditionProgress(LESSONS[index].conditions));
 		setActed(false);
+		actedRef.current = false;
 		setGuided(true);
+		guidedRef.current = true;
 		setIsRunning(true);
 	}
 
 	function runLessonAction() {
-		setState((current) => applyLessonAction(current, lessonIndex));
+		const baseline = stateRef.current;
+		const next = applyLessonAction(baseline, lessonIndex);
+		conditionBaselineRef.current = baseline;
+		stateRef.current = next;
+		setState(next);
 		setActed(true);
+		actedRef.current = true;
+		setConditionProgress((current) => updateConditionProgress(lesson.conditions, current, next, baseline, true));
 		setIsRunning(true);
+	}
+
+	function exploreFreely() {
+		setGuided(false);
+		guidedRef.current = false;
 	}
 
 	function reset() {
 		if (guided) { loadLesson(lessonIndex); return; }
-		setState((current) => setSimulationStrategy(current, current.strategy));
+		const next = setSimulationStrategy(stateRef.current, stateRef.current.strategy);
+		stateRef.current = next;
+		setState(next);
 	}
 
 	return (
@@ -141,12 +185,21 @@ export default function CongestionSimulator() {
 				<div className={styles.LessonActions}>
 					<button type="button" disabled={acted} onClick={runLessonAction}>{acted ? "Change applied" : lesson.action}</button>
 					<button type="button" onClick={() => loadLesson(lessonIndex)}>Replay experiment</button>
-					<button type="button" onClick={() => setGuided(false)}>Explore freely</button>
+					<button type="button" onClick={exploreFreely}>Explore freely</button>
 				</div>
 				<p className={styles.Observation} aria-live="polite">{acted ? lesson.observation : "Make a prediction, then apply the change. The clock keeps running."}</p>
+				{acted && <ul className={styles.Conditions} aria-label="Experiment checks">
+					{lesson.conditions.map((condition) => {
+						const completed = (conditionProgress[condition.id]?.completedAtMs ?? null) !== null;
+						return <li className={completed ? styles.ConditionComplete : ""} key={condition.id}>
+							<span aria-hidden="true">{completed ? "✓" : "○"}</span>
+							<div><strong>{condition.label}</strong><small>{condition.description}</small></div>
+						</li>;
+					})}
+				</ul>}
 				<nav className={styles.LessonActions} aria-label="Experiments">
 					<button type="button" disabled={lessonIndex === 0} onClick={() => loadLesson(lessonIndex - 1)}>Previous</button>
-					<button type="button" disabled={!acted} onClick={() => lessonIndex + 1 < LESSONS.length ? loadLesson(lessonIndex + 1) : setGuided(false)}>{lessonIndex + 1 < LESSONS.length ? "Next experiment" : "Explore all controllers"}</button>
+					<button type="button" disabled={!acted} onClick={() => lessonIndex + 1 < LESSONS.length ? loadLesson(lessonIndex + 1) : exploreFreely()}>{lessonIndex + 1 < LESSONS.length ? "Next experiment" : "Explore all controllers"}</button>
 				</nav>
 				<small>Each experiment starts a fresh run. Applying its change preserves requests and existing controller histories.</small>
 			</div> : <div className={styles.Challenge}>
@@ -201,7 +254,11 @@ export default function CongestionSimulator() {
 						</div>
 					</div>
 					{!guided && <label className={styles.ControlLabel}>Processing time
-						<select className={styles.ProcessingTime} value={state.serviceMs} onChange={(event) => setState((current) => ({ ...current, serviceMs: Number(event.target.value) }))}>
+						<select className={styles.ProcessingTime} value={state.serviceMs} onChange={(event) => {
+							const next = { ...stateRef.current, serviceMs: Number(event.target.value) };
+							stateRef.current = next;
+							setState(next);
+						}}>
 							<option value={1000}>Normal</option><option value={3000}>3× slower</option>
 						</select>
 					</label>}

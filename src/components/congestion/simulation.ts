@@ -24,6 +24,7 @@ export interface EndpointState {
 }
 
 export interface ClientState {
+	strategy: ControllerKind;
 	endpoints: EndpointState[];
 	// Keep the same two candidates while admission is blocked: no unlimited resampling.
 	pendingChoices?: number[];
@@ -143,7 +144,7 @@ function createEndpoint(kind: ControllerKind): EndpointState {
 }
 
 function createClient(kind: ControllerKind, workers: number): ClientState {
-	return { endpoints: Array.from({ length: workers }, () => createEndpoint(kind)) };
+	return { strategy: kind, endpoints: Array.from({ length: workers }, () => createEndpoint(kind)) };
 }
 
 export function createInitialState(strategy: ControllerKind = "rate"): SimulationState {
@@ -423,6 +424,18 @@ export function setClientCount(current: SimulationState, count: number): Simulat
 	return { ...current, clients: resizedClients, jobs, cancelled: current.cancelled + removedJobs.length, queueDepth: jobs.filter((job) => job.stage === "queue").length };
 }
 
+export function setClientStrategy(current: SimulationState, clientIndex: number, strategy: ControllerKind): SimulationState {
+	if (clientIndex < 0 || clientIndex >= current.clients.length) return current;
+	const jobs = current.jobs.filter((job) => job.client !== clientIndex);
+	return {
+		...current,
+		clients: current.clients.map((client, index) => index === clientIndex ? createClient(strategy, current.workers) : client),
+		jobs,
+		cancelled: current.cancelled + current.jobs.length - jobs.length,
+		queueDepth: jobs.filter((job) => job.stage === "queue").length,
+	};
+}
+
 export function setWorkerCount(current: SimulationState, count: number): SimulationState {
 	const workers = clamp(count, 1, MAX_WORKERS);
 	if (workers === current.workers) {
@@ -437,7 +450,7 @@ export function setWorkerCount(current: SimulationState, count: number): Simulat
 	const clients = current.clients.map((client) => ({
 		...client,
 		endpoints: workers > current.workers
-			? [...client.endpoints, ...Array.from({ length: workers - current.workers }, () => createEndpoint(current.strategy))]
+			? [...client.endpoints, ...Array.from({ length: workers - current.workers }, () => createEndpoint(client.strategy))]
 			: client.endpoints.slice(0, workers),
 		pendingChoices: client.pendingChoices?.filter((worker) => worker < workers),
 	}));
@@ -519,7 +532,7 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 		const inFlights = client.endpoints.map((_, worker) => jobs.filter((job) => job.client === clientIndex && job.service === worker).length);
 		for (let attempt = 0; attempt < current.workers * MAX_CONTROLLER_LIMIT; attempt++) {
 			const choices = client.pendingChoices?.length ? client.pendingChoices : sampleTwo(current.workers);
-			const worker = chooseEndpoint(client.endpoints, inFlights, choices, current.strategy, nowMs);
+			const worker = chooseEndpoint(client.endpoints, inFlights, choices, client.strategy, nowMs);
 			if (worker === undefined) {
 				client.pendingChoices = choices;
 				break;
@@ -529,8 +542,8 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 			sentByClient[clientIndex][worker]++;
 			inFlights[worker]++;
 			const endpoint = client.endpoints[worker];
-			if (current.strategy !== "concurrency") {
-				endpoint.tatMs = nowMs + 1000 / clientRate(endpoint, current.strategy);
+			if (client.strategy !== "concurrency") {
+				endpoint.tatMs = nowMs + 1000 / clientRate(endpoint, client.strategy);
 			}
 		}
 	}

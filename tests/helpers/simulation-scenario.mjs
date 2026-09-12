@@ -53,18 +53,23 @@ function capture(state) {
 		return {
 			client: clientIndex,
 			worker,
+			strategy: client.strategy,
 			...rolling,
 			...rates(rolling, durationMs),
 			inFlight: jobs.length,
 			queued: jobs.filter((job) => job.stage === "queue").length,
 			limit: endpoint.controller.limit,
 			minRttMs: endpoint.controller.minRtt,
+			shortRttMs: endpoint.controller.shortRtt,
+			longRttMs: endpoint.controller.longRtt,
+			gradientTrendSamples: endpoint.controller.gradient2TrendSamples,
+			backoffCooldown: endpoint.controller.gradient2BackoffCooldown,
 			observedRttMs: endpoint.metrics.latencyMs,
 		};
 	}));
-	const clients = endpointMetrics.map((endpoints) => {
+	const clients = endpointMetrics.map((endpoints, clientIndex) => {
 		const rolling = endpoints.reduce(addMetrics, zeroMetrics());
-		return { ...rolling, ...rates(rolling, durationMs), inFlight: endpoints.reduce((sum, endpoint) => sum + endpoint.inFlight, 0), queued: endpoints.reduce((sum, endpoint) => sum + endpoint.queued, 0) };
+		return { strategy: state.clients[clientIndex].strategy, ...rolling, ...rates(rolling, durationMs), inFlight: endpoints.reduce((sum, endpoint) => sum + endpoint.inFlight, 0), queued: endpoints.reduce((sum, endpoint) => sum + endpoint.queued, 0) };
 	});
 	const workers = state.workerPerformance.map((_, worker) => {
 		const endpoints = endpointMetrics.map((client) => client[worker]);

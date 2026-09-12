@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { setClientCount } from "../src/components/congestion/simulation.ts";
+import { advanceSimulation, createInitialState, setClientCount, setClientStrategy, setWorkerCount } from "../src/components/congestion/simulation.ts";
 import { runScenario } from "./helpers/simulation-scenario.mjs";
 
 test("scenario runner skips 150 seconds of simulated time without wall-clock waits", () => {
@@ -50,6 +50,47 @@ test("fixed concurrency responds to slower work by lowering admission without su
 	assert.equal(concurrencySteady.rejectionRate, 0);
 	assert.ok(concurrencyTransient.sentRate < 2, "longer-held permits reduce transient admission rate");
 	assert.ok(concurrencySteady.completedRate < 1.5, "the slower worker capacity is reflected in steady-state throughput");
+});
+
+test("per-worker concurrency limits discover added worker capacity without global coordination", () => {
+	const { snapshots } = runScenario({
+		seed: 17,
+		strategy: "concurrency",
+		clients: 2,
+		workers: 1,
+		durationMs: 180_000,
+		events: [{ atMs: 60_000, apply: (state) => setWorkerCount(state, 4) }],
+		checkpoints: [60_000, 180_000],
+	});
+	const before = snapshots.get(60_000);
+	const steady = snapshots.get(180_000);
+
+	assert.equal(before.workers, 4, "new workers create cold endpoint state in each client");
+	assert.ok(steady.completedRate > before.completedRate * 2.5, "each client can use capacity discovered at the new workers");
+	assert.equal(steady.dropped, 0, "the extra endpoint windows do not require a shared global limit");
+	assert.ok(steady.byWorker.filter((worker) => worker.completedRate > 0).length === 4, "work reaches every worker");
+});
+
+test("worker removal cancels only affected work and restored capacity recovers throughput", () => {
+	const { snapshots } = runScenario({
+		seed: 17,
+		strategy: "concurrency",
+		clients: 3,
+		workers: 4,
+		durationMs: 210_000,
+		events: [
+			{ atMs: 60_000, apply: (state) => setWorkerCount(state, 1) },
+			{ atMs: 120_000, apply: (state) => setWorkerCount(state, 4) },
+		],
+		checkpoints: [60_000, 90_000, 210_000],
+	});
+	const constrained = snapshots.get(90_000);
+	const recovered = snapshots.get(210_000);
+
+	assert.ok(constrained.cancelled > 0, "jobs bound for removed workers are cancelled locally");
+	assert.equal(constrained.dropped, 0, "local cancellation is not reported as a server rejection");
+	assert.ok(recovered.completedRate > constrained.completedRate * 3, "newly restored endpoints recover aggregate throughput");
+	assert.equal(recovered.dropped, 0);
 });
 
 test("checkpoints expose client, worker, and client-worker rolling statistics for fairness checks", () => {
@@ -102,4 +143,93 @@ test("late-arriving Gradient2 clients can retain an uneven throughput share", ()
 
 	assert.ok(steady.clientThroughputFairness < 0.85, "independent local controllers do not automatically converge on an equal share");
 	assert.ok(Math.max(...throughputs) > Math.min(...throughputs) * 2, "the difference is visible in client throughput, not only controller internals");
+});
+
+test("a fixed-rate client takes capacity from a competing Vegas client regardless of arrival order", () => {
+	function runMixed(firstStrategy, secondStrategy) {
+		return runScenario({
+			seed: 17,
+			strategy: firstStrategy,
+			clients: 1,
+			workers: 1,
+			durationMs: 180_000,
+			events: [{ atMs: 60_000, apply: (state) => setClientStrategy(setClientCount(state, 2), 1, secondStrategy) }],
+			checkpoints: [180_000],
+		}).snapshots.get(180_000);
+	}
+
+	const rateFirst = runMixed("rate", "vegas");
+	const vegasFirst = runMixed("vegas", "rate");
+
+	assert.deepEqual(rateFirst.byClient.map((client) => client.strategy), ["rate", "vegas"]);
+	assert.ok(rateFirst.byClient[0].completedRate > rateFirst.byClient[1].completedRate * 3, "an established fixed-rate sender holds its queue position");
+	assert.ok(vegasFirst.byClient[1].completedRate > vegasFirst.byClient[0].completedRate * 3, "the later fixed-rate sender takes the released capacity too");
+	assert.ok(rateFirst.clientThroughputFairness < 0.75 && vegasFirst.clientThroughputFairness < 0.75);
+});
+
+test("a client joining behind a queue first learns a congested minimum RTT, then needs a clean sample", () => {
+	const { snapshots } = runScenario({
+		seed: 17,
+		strategy: "vegas",
+		clients: 2,
+		workers: 1,
+		durationMs: 120_000,
+		events: [{ atMs: 60_000, apply: (state) => setClientCount(state, 3) }],
+		checkpoints: [60_000, 90_000, 120_000],
+	});
+	const joinedDuringCongestion = snapshots.get(90_000).byEndpoint[2][0];
+	const afterDrain = snapshots.get(120_000).byEndpoint[2][0];
+
+	assert.ok(joinedDuringCongestion.minRttMs > 3000, "the late client mistakes queued time for its initial baseline");
+	assert.equal(afterDrain.minRttMs, 3000, "a later unloaded sample repairs that baseline");
+});
+
+test("Gradient2 detects a rising short RTT relative to its long RTT after capacity is removed", () => {
+	const { snapshots } = runScenario({
+		seed: 17,
+		strategy: "gradient2",
+		clients: 2,
+		workers: 4,
+		durationMs: 90_000,
+		events: [{ atMs: 60_000, apply: (state) => setWorkerCount(state, 1) }],
+		checkpoints: [60_000, 90_000],
+	});
+	const endpoint = snapshots.get(90_000).byEndpoint[0][0];
+
+	assert.ok(endpoint.shortRttMs > endpoint.longRttMs, "the short EWMA sees the worsening delay before the long EWMA catches up");
+	assert.ok(endpoint.limit < 2, "the affected endpoint has reduced its local target");
+});
+
+test("a fractional controller target becomes spaced GCRA admissions instead of an integer burst", () => {
+	let state = setWorkerCount(createInitialState("gradient2"), 1);
+	state.clients[0].endpoints[0].controller.limit = 1.3;
+
+	state = advanceSimulation(state);
+	assert.equal(state.nextJobId, 2, "the first request is admitted immediately");
+	assert.ok(Math.abs(state.clients[0].endpoints[0].tatMs - 2557.69) < 1, "1.3 requests over a 3 s RTT yields a paced 2.31 s interval");
+	for (let tick = 0; tick < 9; tick++) state = advanceSimulation(state);
+	assert.equal(state.nowMs, 2500);
+	assert.equal(state.nextJobId, 2, "the fractional target does not round up and burst a second request early");
+	state = advanceSimulation(state);
+	assert.equal(state.nowMs, 2750);
+	assert.equal(state.nextJobId, 3, "the next request is admitted once the theoretical-arrival clock permits it");
+});
+
+test("the final scale-and-slowdown scenario recovers under Vegas while fixed rate stays overloaded", () => {
+	const events = [
+		{ atMs: 30_000, apply: (state) => setClientCount(state, 3) },
+		{ atMs: 60_000, apply: (state) => ({ ...state, serviceMs: 3000 }) },
+		{ atMs: 120_000, apply: (state) => ({ ...state, serviceMs: 1000 }) },
+	];
+	const options = { seed: 17, clients: 1, workers: 4, durationMs: 240_000, events, checkpoints: [90_000, 240_000] };
+	const rate = runScenario({ ...options, strategy: "rate" }).snapshots;
+	const vegas = runScenario({ ...options, strategy: "vegas" }).snapshots;
+	const rateSteady = rate.get(240_000);
+	const vegasSteady = vegas.get(240_000);
+
+	assert.ok(rateSteady.rejectionRate > 0.5, "the old fixed rate remains above the recovered workers' safe load");
+	assert.ok(rateSteady.latencyMs > 8000, "the fixed-rate queues persist after the service-time recovery");
+	assert.equal(vegasSteady.rejectionRate, 0, "Vegas eventually drains its queue rather than retaining loss as a steady state");
+	assert.ok(vegasSteady.latencyMs < rateSteady.latencyMs * 0.7, "adaptive pacing recovers a much shorter request path");
+	assert.ok(vegasSteady.dropped < rateSteady.dropped / 10, "the recovery prevents most of the fixed-rate loss");
 });

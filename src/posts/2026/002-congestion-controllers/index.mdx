@@ -80,6 +80,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Pause while a job is waiting, inspect its timeline, then resume until it completes. Compare its service time with the duration observed by the client.
 
+*Completion checks:* The selected job must show non-zero queue time; its total RTT must exceed its service time.
+
 *Exit:* Once latency is decomposed, the queue becomes visible as both stored work and added duration.
 
 ## 3. Name the health signals
@@ -89,6 +91,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Group metrics explicitly. RED shows offered/completed rate, rejected work, and latency percentiles. USE shows busy workers, jobs waiting, and worker failures. Avoid a single green/red health verdict that hides trade-offs.
 
 *CTA:* Remove a worker and describe the result using one RED signal and one USE signal. Add it back and watch which measurement recovers first.
+
+*Completion checks:* Name a request metric (rate, errors, or duration) and a resource metric (utilisation, saturation, or errors); after recovery, show which returns to baseline first.
 
 *Exit:* We now have the vocabulary to say what a limiter improves and what it merely moves around.
 
@@ -102,6 +106,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Press “open the load balancer.” The same jobs and workers remain, but queued jobs are now attached to the worker that was selected for them.
 
+*Completion checks:* Every queued job must name one worker; find an idle worker while another worker retains queued work.
+
 *Exit:* Once placement is irreversible, a free worker can coexist with work waiting behind a busy one.
 
 ## 5. Random placement can waste capacity
@@ -111,6 +117,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Hold total offered load below total service capacity. Route each job to a uniformly random worker and plot queue depth per worker rather than only the sum.
 
 *CTA:* Run three identical trials. Look for a moment where at least one worker is idle while another has queued work, then compare the latency tails between trials.
+
+*Completion checks:* Capture one imbalanced moment in at least two trials; compare the slowest successful request, not only average throughput.
 
 *Exit:* Aggregate capacity is not enough; the client needs a cheap way to make a better local placement decision.
 
@@ -122,6 +130,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Create one slow worker, switch between Random and Power of Two, and compare per-worker queue depth and p99 latency under the same demand.
 
+*Completion checks:* Under Power of Two, the slow worker must receive less new work or carry a smaller queue than under Random; record the p99 change.
+
 *Exit:* Power of Two becomes the common routing layer for every controller that follows. From here on, controller comparisons change admission policy without quietly changing load-balancing quality.
 
 ## 7. Every endpoint needs local memory
@@ -131,6 +141,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Selecting a client reveals its endpoint table. Selecting a worker shows that different clients can hold different RTT estimates and limits for the same server. Newly discovered workers start visibly “cold” rather than inheriting fleet-wide knowledge.
 
 *CTA:* Add a worker and inspect it from two clients. Send a few requests and watch their endpoint estimates warm independently.
+
+*Completion checks:* The new endpoint begins cold for both clients; each client later records its own RTT and controller state rather than sharing one estimate.
 
 *Exit:* Routing and congestion control use the same observations, but they answer different questions: where should this request go, and is it safe to send now?
 
@@ -144,6 +156,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Hold the worker set constant and raise the per-worker rate until queues appear. Reduce it until the system is stable again.
 
+*Completion checks:* Mark the first sustained queue or rejection; after reducing the rate, sustain an empty queue and zero rejection for five seconds.
+
 *Exit:* The safe number came from manual tuning against one particular fleet shape.
 
 ## 9. Horizontal clients multiply the rate
@@ -153,6 +167,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Add clients without changing any existing client’s configuration. Attribute requests by client colour and show per-client plus total offered rate.
 
 *CTA:* Add clients one at a time. Predict the total rate before each click, then keep going until worker queues or rejections appear.
+
+*Completion checks:* Total offered rate grows with every added client; complete the step only after queueing or rejection persists for five seconds.
 
 *Exit:* A fixed per-client limit encodes an assumption about client count that autoscaling is free to invalidate.
 
@@ -164,6 +180,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Double the workers and observe under-utilisation under a global fixed rate, then use a per-worker rate and observe the opposite scaling behaviour. Remove half the workers without changing clients.
 
+*Completion checks:* With a global rate, added workers must leave spare capacity; with a per-worker rate, verify that both capacity and offered load change; after removal, show the affected queues or cancellations.
+
 *Exit:* The limit must adapt to both sides of the topology, not merely be divided by a deployment replica count.
 
 ## 11. Processing time is not constant
@@ -173,6 +191,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Let each worker drift independently around its baseline performance. Make the drift slow enough to observe but do not provide a cartoon “break server” button; the reader should learn to infer degradation from RED and USE.
 
 *CTA:* Keep rate and topology fixed. Identify the slow worker from its local queue and latency before revealing its hidden service-time multiplier.
+
+*Completion checks:* Identify the slow worker from its queue depth and RTT alone; confirm that its completion rate is lower or its saturation higher than peers.
 
 *Exit:* Rate controls arrivals, but it does not directly bound the amount of unfinished work created by slower responses.
 
@@ -184,6 +204,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Increase demand until only one worker rejects work, then reduce demand by one step. Watch errors stop before latency returns to baseline.
 
+*Completion checks:* Attribute rejection to one worker; after lowering demand, keep errors at zero while duration remains above the original baseline.
+
 *Exit:* Rejection is valuable protection and a useful signal, but it arrives after the latency problem has already begun.
 
 ## 13. Replace rate with work in flight
@@ -193,6 +215,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Retain Power of Two and replace the per-worker rate clock with a fixed in-flight window. Show permits attached to endpoint state and returned only on completion or rejection.
 
 *CTA:* Give one worker a long service-time spike. Compare fixed rate and fixed concurrency with the same nominal throughput, watching that worker’s queue and the client’s send rate.
+
+*Completion checks:* Fixed rate must retain queueing or rejection after the spike; fixed concurrency must reduce admissions and avoid sustained rejection.
 
 *Exit:* Concurrency reacts automatically to duration, but someone still has to choose the window size.
 
@@ -204,6 +228,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Hold one worker steady and adjust its target window. Check whether measured throughput × latency approaches observed concurrency after the transient settles.
 
+*Completion checks:* After a stable window, `throughput × latency` should approximately match observed in-flight work; repeat at a second target.
+
 *Exit:* Little’s Law translates units; it does not tell us which operating point is safe.
 
 ## 15. Find the knee in each worker
@@ -213,6 +239,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Sweep a selected worker’s concurrency target slowly and plot throughput against latency. Mark the unloaded baseline, first saturation, and first rejection without automatically declaring one universal optimum.
 
 *CTA:* Increase the target in small increments. Stop where another increment adds latency but almost no completed throughput, then repeat for a slower worker.
+
+*Completion checks:* Record the first increment with sharply higher latency and little throughput gain; the slower worker should reach that point at a lower target.
 
 *Exit:* A congestion controller automates this probing and retreat instead of baking the knee into configuration.
 
@@ -226,6 +254,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Select AIMD and add clients until one worker rejects. Follow that endpoint’s window through the multiplicative decrease and slow recovery.
 
+*Completion checks:* Capture a rejection, the responsible endpoint’s immediate lower limit, and at least one later additive increase; unrelated endpoints must not reset.
+
 *Exit:* If duration rises before loss, perhaps the client can retreat without requiring the service to reject anything.
 
 ## 17. Vegas listens to delay
@@ -235,6 +265,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Reveal the selected endpoint’s minimum RTT, current RTT, calculated queue estimate, and lower/upper thresholds. Show exactly which completed samples trigger a limit change.
 
 *CTA:* Slow one worker without filling its queue. Watch Vegas reduce only that endpoint’s target before the first rejection, then compare its latency and utilisation with AIMD.
+
+*Completion checks:* The selected endpoint’s Vegas target must fall after RTT rises; verify that queueing/duration improves before sustained rejection, then compare completed throughput with AIMD.
 
 *Exit:* The earlier signal is attractive, but its meaning depends on the baseline and on what every other client is doing.
 
@@ -246,6 +278,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Start two clients at different times and compare their baselines and limits for the same worker after total throughput has stabilised.
 
+*Completion checks:* Show distinct minimum RTTs or limits for the same worker; report each client’s completed-rate share and the Jain fairness score.
+
 *Exit:* A local measurement can be internally consistent while still encoding an accident of arrival order.
 
 ## 19. Why a clean minimum RTT is hard
@@ -255,6 +289,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Let clients join while a worker queue is occupied. Annotate which sample established each minimum and its age. Add a baseline-expiry control without immediately fixing the consequences.
 
 *CTA:* Add a client during congestion, then drain the worker. Compare how long old and new clients take to discover the same unloaded latency.
+
+*Completion checks:* The late client first records a higher minimum RTT; after a clean sample, verify whether it converges to the older client’s baseline.
 
 *Exit:* Refreshing the model requires deliberate periods of exploration or drain, not only passive smoothing.
 
@@ -266,6 +302,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Let one fixed-rate client settle, then add a Vegas client. Wait until aggregate metrics look stable and compare their shares. Reverse their arrival order and repeat.
 
+*Completion checks:* In both orders, compare per-client completed rates; flag completion only after the fixed-rate client has more than its equal share or the fairness score exposes the imbalance.
+
 *Exit:* Low latency is a system outcome, while voluntary restraint is a client behaviour; the two align only when participants react compatibly.
 
 ## 21. Probe, drain, and leave headroom
@@ -275,6 +313,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Add controller phases—Cruise, Probe Up, Drain—and display them per endpoint. Upward probes are jittered across clients; baseline refresh uses an intentionally overlapping drain interval. Show the small throughput cost rather than hiding it.
 
 *CTA:* Begin with unequal client shares, enable probe cycles, and compare convergence time, p99 latency, and unused headroom. Turn probes off again to see whether the imbalance freezes.
+
+*Completion checks:* Record fairness, p99, and utilisation before probing; complete when probe-on changes convergence and probe-off leaves the share distribution stable again.
 
 *Exit:* Probing improves convergence but does not provide strict fairness; only a scheduler at the contested resource can guarantee an allocation.
 
@@ -288,6 +328,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Select Gradient2, remove one worker, and identify the rising short-term line before the limit falls. Add the worker back and compare recovery speed with Vegas.
 
+*Completion checks:* The short RTT EWMA must exceed the long RTT EWMA before the local limit falls; after restoring capacity, measure time to a stable queue and compare it with Vegas.
+
 *Exit:* Gradient2 improves the delay signal, but its fractional target still needs a mechanism that decides exactly when requests leave.
 
 ## 23. Turn a fractional window into a smooth rate
@@ -297,6 +339,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Contrast an integer semaphore that alternates in bursts with a paced fractional target. Display the theoretical next-arrival time and preserve the controller’s local state when a request is routed elsewhere.
 
 *CTA:* Set the same average target under burst and paced modes. Compare queue peaks and completion rate over a long enough window that both send the same amount of work.
+
+*Completion checks:* The two modes must offer comparable total work; paced mode should have a lower peak queue without losing meaningful completed throughput.
 
 *Exit:* The controller chooses a safe amount of outstanding work; pacing prevents that amount from arriving as a microburst.
 
@@ -310,6 +354,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Exhaust one candidate’s limit and watch the request choose the other. Exhaust both and verify that no server queue grows until an admission slot opens.
 
+*Completion checks:* With one eligible candidate, traffic must choose it; with neither eligible, total server queue depth must remain flat and the pending choice must not be resampled.
+
 *Exit:* The complete client is now a load balancer plus a collection of endpoint-specific feedback loops, not one service-wide magic number.
 
 ## 25. Stale endpoints need exploration
@@ -319,6 +365,8 @@ The remaining sections are development briefs for expanding these experiments, r
 *Simulator:* Mark endpoint estimates as fresh, ageing, or stale. Give new and stale workers occasional probe eligibility, with jitter across clients and a cooldown after failure. Do not initialize a cold worker as either infinitely good or permanently bad.
 
 *CTA:* Slow a worker until traffic moves away, then restore it. Compare recovery with passive Power of Two and with stale-endpoint probes enabled.
+
+*Completion checks:* Passive routing must leave the restored worker under-sampled or underused; bounded probes must create fresh samples and recover a measurable share without a queue spike.
 
 *Exit:* Exploration trades a small amount of known-good capacity for the information needed to notice that the world changed.
 
@@ -330,6 +378,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Add two workers and then three clients in quick succession. Follow which pairs warm first, which probes collide, and whether older clients temporarily retain more throughput.
 
+*Completion checks:* New client–worker pairs begin cold; existing pairs retain state; record the transient fairness score and any cancelled work when the fleet changes.
+
 *Exit:* The transients are part of the algorithm’s behaviour, not animation noise; autoscaling means the system may spend much of its life outside steady state.
 
 ## 27. Read the whole system, not one metric
@@ -340,6 +390,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Choose a controller and perturb both sides of the fleet. Explain the result using one RED signal, one USE signal, and one fairness measurement before revealing the simulator’s summary.
 
+*Completion checks:* Identify one rate/error/duration signal, one utilisation/saturation/error signal, and a per-client fairness value; no single green health label is sufficient.
+
 *Exit:* There is no single “best” controller independent of whether the objective is latency, utilisation, stability, fairness, or recovery speed.
 
 ## 28. The final lesson
@@ -349,5 +401,7 @@ The remaining sections are development briefs for expanding these experiments, r
 *Final visual:* Collapse the simulator into the finished client pipeline: endpoint discovery feeds the Power-of-Two chooser; each endpoint owns measurements and a controller; eligible work passes through its pacing clock; every worker owns a small bounded queue. Animate one final request through the decisions as the labels recap the article.
 
 *CTA:* Switch between the fixed-rate baseline and the complete adaptive client under one final scale-and-slowdown scenario. The goal is not to make failure impossible, but to see the feedback loop recover without centralized coordination.
+
+*Completion checks:* Fixed rate must retain queueing or rejection after the perturbation; the adaptive path must reduce admission, drain the queue, and regain a stable completion rate after recovery.
 
 The finished article should leave the reader with one durable question: when the system changes, which observation causes this limit to change with it?

@@ -15,6 +15,7 @@ import {
 	setStrategy as setSimulationStrategy,
 	setWorkerCount,
 	serviceCapacity,
+	summarizeBreakdown,
 	TICK_MS,
 	WORKER_QUEUE_LIMIT,
 } from "./congestion/simulation";
@@ -57,12 +58,14 @@ export default function CongestionSimulator() {
 	const [isRunning, setIsRunning] = useState(true);
 	const [state, setState] = useState<SimulationState>(() => createLesson(0));
 	const [lessonIndex, setLessonIndex] = useState(0);
+	const [stepIndex, setStepIndex] = useState(0);
 	const [guided, setGuided] = useState(true);
 	const [acted, setActed] = useState(false);
-	const [conditionProgress, setConditionProgress] = useState(() => createConditionProgress(LESSONS[0].conditions));
+	const [conditionProgress, setConditionProgress] = useState(() => createConditionProgress(LESSONS[0].steps[0].conditions));
 	const lesson = LESSONS[lessonIndex];
+	const step = lesson.steps[stepIndex];
 	const stateRef = useRef(state);
-	const lessonRef = useRef(lesson);
+	const stepRef = useRef(step);
 	const guidedRef = useRef(guided);
 	const actedRef = useRef(acted);
 	const conditionBaselineRef = useRef<SimulationState>(createLesson(0));
@@ -70,6 +73,8 @@ export default function CongestionSimulator() {
 		rejectionRate: state.rejectionRate,
 		capacity: serviceCapacity(state),
 	}), [state]);
+	const breakdown = useMemo(() => summarizeBreakdown(state), [state]);
+	const conditionsComplete = step.conditions.every((condition) => (conditionProgress[condition.id]?.completedAtMs ?? null) !== null);
 	const isRejecting = (metrics.rejectionRate ?? 0) > 0.005;
 	const status = isRejecting
 		? "Rejecting work"
@@ -88,7 +93,7 @@ export default function CongestionSimulator() {
 			setState(next);
 			if (guidedRef.current) {
 				setConditionProgress((current) => updateConditionProgress(
-					lessonRef.current.conditions,
+					stepRef.current.conditions,
 					current,
 					next,
 					conditionBaselineRef.current,
@@ -121,11 +126,12 @@ export default function CongestionSimulator() {
 	function loadLesson(index: number) {
 		const next = createLesson(index);
 		setLessonIndex(index);
-		lessonRef.current = LESSONS[index];
+		setStepIndex(0);
+		stepRef.current = LESSONS[index].steps[0];
 		setState(next);
 		stateRef.current = next;
 		conditionBaselineRef.current = next;
-		setConditionProgress(createConditionProgress(LESSONS[index].conditions));
+		setConditionProgress(createConditionProgress(LESSONS[index].steps[0].conditions));
 		setActed(false);
 		actedRef.current = false;
 		setGuided(true);
@@ -135,14 +141,29 @@ export default function CongestionSimulator() {
 
 	function runLessonAction() {
 		const baseline = stateRef.current;
-		const next = applyLessonAction(baseline, lessonIndex);
+		const next = applyLessonAction(baseline, lessonIndex, stepIndex);
 		conditionBaselineRef.current = baseline;
 		stateRef.current = next;
 		setState(next);
 		setActed(true);
 		actedRef.current = true;
-		setConditionProgress((current) => updateConditionProgress(lesson.conditions, current, next, baseline, true));
+		setConditionProgress((current) => updateConditionProgress(step.conditions, current, next, baseline, true));
 		setIsRunning(true);
+	}
+
+	function advanceGuide() {
+		if (stepIndex + 1 < lesson.steps.length) {
+			const nextStep = lesson.steps[stepIndex + 1];
+			setStepIndex(stepIndex + 1);
+			stepRef.current = nextStep;
+			conditionBaselineRef.current = stateRef.current;
+			setConditionProgress(createConditionProgress(nextStep.conditions));
+			setActed(false);
+			actedRef.current = false;
+			return;
+		}
+		if (lessonIndex + 1 < LESSONS.length) loadLesson(lessonIndex + 1);
+		else exploreFreely();
 	}
 
 	function exploreFreely() {
@@ -183,13 +204,13 @@ export default function CongestionSimulator() {
 			{guided ? <div className={styles.Lesson}>
 				<p>{lesson.introduction}</p>
 				<div className={styles.LessonActions}>
-					<button type="button" disabled={acted} onClick={runLessonAction}>{acted ? "Change applied" : lesson.action}</button>
+					<button type="button" disabled={acted} onClick={runLessonAction}>{acted ? "Change applied" : step.action}</button>
 					<button type="button" onClick={() => loadLesson(lessonIndex)}>Replay experiment</button>
 					<button type="button" onClick={exploreFreely}>Explore freely</button>
 				</div>
-				<p className={styles.Observation} aria-live="polite">{acted ? lesson.observation : "Make a prediction, then apply the change. The clock keeps running."}</p>
+				<p className={styles.Observation} aria-live="polite">{acted ? step.observation : "Make a prediction, then apply the change. The clock keeps running."}</p>
 				{acted && <ul className={styles.Conditions} aria-label="Experiment checks">
-					{lesson.conditions.map((condition) => {
+					{step.conditions.map((condition) => {
 						const completed = (conditionProgress[condition.id]?.completedAtMs ?? null) !== null;
 						return <li className={completed ? styles.ConditionComplete : ""} key={condition.id}>
 							<span aria-hidden="true">{completed ? "✓" : "○"}</span>
@@ -199,9 +220,9 @@ export default function CongestionSimulator() {
 				</ul>}
 				<nav className={styles.LessonActions} aria-label="Experiments">
 					<button type="button" disabled={lessonIndex === 0} onClick={() => loadLesson(lessonIndex - 1)}>Previous</button>
-					<button type="button" disabled={!acted} onClick={() => lessonIndex + 1 < LESSONS.length ? loadLesson(lessonIndex + 1) : exploreFreely()}>{lessonIndex + 1 < LESSONS.length ? "Next experiment" : "Explore all controllers"}</button>
+					<button type="button" disabled={!conditionsComplete} onClick={advanceGuide}>{stepIndex + 1 < lesson.steps.length ? "Next step" : lessonIndex + 1 < LESSONS.length ? "Next experiment" : "Explore all controllers"}</button>
 				</nav>
-				<small>Each experiment starts a fresh run. Applying its change preserves requests and existing controller histories.</small>
+				<small>Complete every check to continue. Each experiment starts a seeded, reproducible run; applying a change preserves requests and existing controller histories.</small>
 			</div> : <div className={styles.Challenge}>
 				<p>Change clients, workers, or processing time and follow the response.</p>
 				<button className={styles.Reset} type="button" onClick={() => loadLesson(0)}>Restart guided tour</button>
@@ -276,10 +297,11 @@ export default function CongestionSimulator() {
 				</div>
 			</div>
 
-			<div className={styles.Metrics}>
+			<div className={styles.Metrics} aria-label="RED and USE metrics">
 				<div><span><b>Rate</b> Completed / offered</span><strong>{formatMetricValue(state.completedRate)} / {formatMetricValue(state.sentRate)}/s</strong></div>
 				<div className={isRejecting ? styles.MetricWarning : ""}><span><b>Errors</b> Rejected</span><strong>{metrics.rejectionRate === null ? "—" : `${formatMetricValue(metrics.rejectionRate * 100)}%`}</strong></div>
-				<div className={(state.latencyMs ?? 0) > 4000 ? styles.MetricWarning : ""}><span><b>Duration</b> Mean successful RTT</span><strong>{state.latencyMs === null ? "—" : formatLatency(state.latencyMs)}</strong></div>
+				<div className={(state.p99LatencyMs ?? 0) > 4000 ? styles.MetricWarning : ""}><span><b>Duration</b> p50 / p99 RTT</span><strong>{state.p50LatencyMs === null ? "—" : `${formatLatency(state.p50LatencyMs)} / ${formatLatency(state.p99LatencyMs ?? state.p50LatencyMs)}`}</strong></div>
+				<div><span><b>Utilisation</b> Busy worker time</span><strong>{formatMetricValue(state.utilisation * 100)}%</strong></div>
 				<div className={state.queueDepth > 0 ? styles.MetricWarning : ""}><span><b>Saturation</b> Waiting</span><strong>{state.queueDepth}</strong></div>
 			</div>
 
@@ -287,13 +309,22 @@ export default function CongestionSimulator() {
 				<summary>Inspect client–worker controllers</summary>
 				<p>Each client keeps its own latency estimate and limit for each worker. The source waits when both sampled workers have no admission budget.</p>
 				<div className={styles.EndpointTable}>
+					<p>Client fairness: <strong>{breakdown.clientThroughputFairness === null ? "—" : formatMetricValue(breakdown.clientThroughputFairness)}</strong> · Worker fairness: <strong>{breakdown.workerThroughputFairness === null ? "—" : formatMetricValue(breakdown.workerThroughputFairness)}</strong></p>
+					<table>
+						<thead><tr><th>Client</th><th>Completed</th><th>Rejected</th><th>p99 RTT</th></tr></thead>
+						<tbody>{breakdown.byClient.map((client, index) => <tr key={index}><th scope="row">Client {index + 1}</th><td>{formatMetricValue(client.completedRate)}/s</td><td>{client.rejectionRate === null ? "—" : `${formatMetricValue(client.rejectionRate * 100)}%`}</td><td>{client.p99LatencyMs === null ? "—" : formatLatency(client.p99LatencyMs)}</td></tr>)}</tbody>
+					</table>
+					<table>
+						<thead><tr><th>Worker</th><th>Completed</th><th>Utilisation</th><th>p99 RTT</th></tr></thead>
+						<tbody>{breakdown.byWorker.map((worker, index) => <tr key={index}><th scope="row">Worker {index + 1}</th><td>{formatMetricValue(worker.completedRate)}/s</td><td>{formatMetricValue(worker.utilisation * 100)}%</td><td>{worker.p99LatencyMs === null ? "—" : formatLatency(worker.p99LatencyMs)}</td></tr>)}</tbody>
+					</table>
 					<table>
 						<thead><tr><th>Client → worker</th><th>In flight</th><th>Limit</th><th>RTT</th></tr></thead>
 						<tbody>{state.clients.flatMap((client, clientIndex) => client.endpoints.map((endpoint, worker) => (
 							<tr key={`${clientIndex}:${worker}`}>
 								<th scope="row">{clientIndex + 1} → {worker + 1}</th>
 								<td>{state.jobs.filter((job) => job.client === clientIndex && job.service === worker).length}</td>
-								<td>{state.strategy === "rate" ? `${RATE_PER_ENDPOINT}/s` : formatMetricValue(endpoint.controller.limit)}</td>
+								<td>{client.strategy === "rate" ? `${RATE_PER_ENDPOINT}/s` : formatMetricValue(endpoint.controller.limit)}</td>
 								<td>{endpoint.observed ? formatLatency(endpoint.metrics.latencyMs) : "Cold"}</td>
 							</tr>
 						)))}</tbody>

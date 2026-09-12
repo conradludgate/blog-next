@@ -31,6 +31,7 @@ class PixiScene {
 	private workers: Point[] = [];
 	private queues: Point[] = [];
 	private mobile = false;
+	private reduceMotion = false;
 
 	constructor(private readonly app: Application, state: SimulationState) {
 		this.state = state;
@@ -41,6 +42,7 @@ class PixiScene {
 		const width = this.app.screen.width;
 		const height = this.app.screen.height;
 		this.mobile = window.matchMedia("(max-width: 760px)").matches;
+		this.reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 		const clientRows = Math.ceil(state.clients.length / 2);
 		this.clients = state.clients.map((_, i) => ({
 			x: this.mobile ? width * (i % 2 === 0 ? 0.27 : 0.73) : 72,
@@ -137,7 +139,7 @@ class PixiScene {
 	}
 	tick(delta: number) {
 		for (const view of this.jobs.values()) {
-			view.progress = Math.min(1, view.progress + delta / TICK_MS);
+			view.progress = this.reduceMotion ? 1 : Math.min(1, view.progress + delta / TICK_MS);
 			view.container.position.copyFrom(interpolate(view.from, view.to, view.progress));
 		}
 		this.app.render();

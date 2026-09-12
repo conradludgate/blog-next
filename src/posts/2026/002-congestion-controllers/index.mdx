@@ -58,7 +58,7 @@ First we limit how often requests can start. Each client may send at most half a
 
 Use the guided experiments below to change one thing at a time. Watch **completed throughput** as well as offered load. More arrivals do not necessarily mean more useful work. The queue shows waiting directly, while the duration measurement includes the time successful requests spend getting to the worker, waiting, and being processed.
 
-The second and third experiments apply the same processing-time increase to rate and concurrency limits. A rate budget does not shrink when work becomes slower. A concurrency permit, however, stays occupied until the request finishes, so the rate of new admissions falls naturally. These settings do not have identical baseline throughput; compare their response to the slowdown, rather than treating the absolute numbers as a controller benchmark.
+The second and third experiments begin from the same healthy one-client topology and apply the same processing-time increase to rate and concurrency limits. A rate budget does not shrink when work becomes slower. A concurrency permit, however, stays occupied until the request finishes, so the rate of new admissions falls naturally. Compare their response to the slowdown rather than treating the absolute numbers as a controller benchmark.
 
 That still leaves a choice: how much unfinished work should each client allow? A fixed permit count cannot know how many other clients are competing for the same worker. The final experiment introduces Vegas, which uses latency observations to adjust that target. Its estimates are local, so the result depends on when clients arrive and what they observe.
 

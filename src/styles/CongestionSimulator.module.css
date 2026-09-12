@@ -145,7 +145,7 @@
 .QueueTrack { flex: 1 1 auto; overflow: hidden; height: 0.45rem; border-radius: 99px; background: color-mix(in srgb, var(--color-fg) 10%, transparent); }
 .QueueTrack i { display: block; height: 100%; border-radius: inherit; background: var(--sim-accent); transition: width 180ms ease; }
 
-.Metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 1.25rem; border-block: 1px solid var(--sim-border); }
+.Metrics { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: 1.25rem; border-block: 1px solid var(--sim-border); }
 .Metrics > div { display: flex; min-width: 0; flex-direction: column; gap: 0.2rem; padding: 0.8rem; border-left: 1px solid var(--sim-border); }
 .Metrics > div:first-child { border-left: 0; }
 .Metrics span { overflow: hidden; color: var(--sim-muted); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
@@ -180,6 +180,7 @@
 	.Metrics { grid-template-columns: repeat(2, 1fr); }
 	.Metrics > div:nth-child(3) { border-left: 0; border-top: 1px solid var(--sim-border); }
 	.Metrics > div:nth-child(4) { border-top: 1px solid var(--sim-border); }
+	.Metrics > div:nth-child(5) { border-left: 0; border-top: 1px solid var(--sim-border); }
 	.Footer { flex-direction: column; }
 }
 
@@ -224,6 +225,8 @@
 .EndpointTable { overflow-x: auto; max-height: 24rem; }
 .EndpointTable table { width: 100%; border-collapse: collapse; text-align: left; font-variant-numeric: tabular-nums; }
 .EndpointTable th, .EndpointTable td { padding: 0.5rem; border-bottom: 1px solid var(--sim-border); }
+.EndpointTable table + table { margin-top: 1rem; }
+.EndpointTable p { margin: 0 0 0.75rem; }
 
 .Lesson { margin-top: 1rem; padding: 0.8rem 1rem; border-left: 4px solid var(--sim-accent); background: var(--sim-accent-soft); font-size: 0.9375rem; line-height: 1.5; }
 .Lesson > p { margin: 0 0 0.75rem; }

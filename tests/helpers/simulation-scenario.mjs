@@ -4,15 +4,8 @@ import {
 	setClientCount,
 	setWorkerCount,
 	DISPLAY_WINDOW_MS,
+	summarizeBreakdown,
 } from "../../src/components/congestion/simulation.ts";
-
-function seededRandom(seed) {
-	let value = seed >>> 0;
-	return () => {
-		value = (Math.imul(value, 1664525) + 1013904223) >>> 0;
-		return value / 2 ** 32;
-	};
-}
 
 function zeroMetrics() {
 	return { sent: 0, completed: 0, rejected: 0, latencySumMs: 0 };
@@ -35,12 +28,6 @@ function rates(metrics, durationMs) {
 		rejectionRate: outcomes > 0 ? metrics.rejected / outcomes : null,
 		latencyMs: metrics.completed > 0 ? metrics.latencySumMs / metrics.completed : null,
 	};
-}
-
-function jainFairness(values) {
-	const sum = values.reduce((total, value) => total + value, 0);
-	const squares = values.reduce((total, value) => total + value ** 2, 0);
-	return squares === 0 ? null : sum ** 2 / (values.length * squares);
 }
 
 function capture(state) {
@@ -76,6 +63,9 @@ function capture(state) {
 		const rolling = endpoints.reduce(addMetrics, zeroMetrics());
 		return { ...rolling, ...rates(rolling, durationMs), inFlight: endpoints.reduce((sum, endpoint) => sum + endpoint.inFlight, 0), queued: endpoints.reduce((sum, endpoint) => sum + endpoint.queued, 0) };
 	});
+	const breakdown = summarizeBreakdown(state);
+	const clientsWithDisplayMetrics = clients.map((client, index) => ({ ...client, ...breakdown.byClient[index] }));
+	const workersWithDisplayMetrics = workers.map((worker, index) => ({ ...worker, ...breakdown.byWorker[index] }));
 	return {
 		nowMs: state.nowMs,
 		clients: state.clients.length,
@@ -92,10 +82,10 @@ function capture(state) {
 		lowestLimit: Math.min(...limits),
 		highestLimit: Math.max(...limits),
 		byEndpoint: endpointMetrics,
-		byClient: clients,
-		byWorker: workers,
-		clientThroughputFairness: jainFairness(clients.map((client) => client.completedRate)),
-		workerThroughputFairness: jainFairness(workers.map((worker) => worker.completedRate)),
+		byClient: clientsWithDisplayMetrics,
+		byWorker: workersWithDisplayMetrics,
+		clientThroughputFairness: breakdown.clientThroughputFairness,
+		workerThroughputFairness: breakdown.workerThroughputFairness,
 	};
 }
 
@@ -121,21 +111,14 @@ export function runScenario({
 	const scheduled = [...events].sort((a, b) => a.atMs - b.atMs);
 	const wanted = new Set(checkpoints);
 	const snapshots = new Map();
-	const originalRandom = Math.random;
-	Math.random = seededRandom(seed);
-
-	try {
-		let state = setWorkerCount(setClientCount(createInitialState(strategy), clients), workers);
-		let nextEvent = 0;
-		for (;;) {
-			while (scheduled[nextEvent]?.atMs === state.nowMs) {
-				state = scheduled[nextEvent++].apply(state);
-			}
-			if (wanted.has(state.nowMs)) snapshots.set(state.nowMs, capture(state));
-			if (state.nowMs === durationMs) return { state, snapshots };
-			state = advanceSimulation(state);
+	let state = setWorkerCount(setClientCount(createInitialState(strategy, seed), clients), workers);
+	let nextEvent = 0;
+	for (;;) {
+		while (scheduled[nextEvent]?.atMs === state.nowMs) {
+			state = scheduled[nextEvent++].apply(state);
 		}
-	} finally {
-		Math.random = originalRandom;
+		if (wanted.has(state.nowMs)) snapshots.set(state.nowMs, capture(state));
+		if (state.nowMs === durationMs) return { state, snapshots };
+		state = advanceSimulation(state);
 	}
 }

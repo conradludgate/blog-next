@@ -40,6 +40,8 @@ export interface MetricBucket {
 	completed: number;
 	rejected: number;
 	latencySumMs: number;
+	latencySamplesMs: number[];
+	workerBusy: boolean[];
 	endpoints?: EndpointMetricBucket[][];
 }
 
@@ -48,6 +50,7 @@ export interface EndpointMetricBucket {
 	completed: number;
 	rejected: number;
 	latencySumMs: number;
+	latencySamplesMs: number[];
 }
 
 export interface Job {
@@ -78,6 +81,12 @@ export interface SimulationState {
 	dropped: number;
 	completed: number;
 	sentRate: number;
+	p50LatencyMs: number | null;
+	p99LatencyMs: number | null;
+	utilisation: number;
+	randomSeed: number;
+	randomState: number;
+	performanceJitter: number;
 	nowMs: number;
 }
 
@@ -113,6 +122,12 @@ export const GRADIENT2_MAX_LIMIT = 12;
 export const GRADIENT2_CONTROL_INTERVAL_MS = 1000;
 export const GRADIENT2_TARGET_QUEUE = 0.75;
 export const GCRA_MAX_RATE = 4;
+export const DEFAULT_RANDOM_SEED = 17;
+
+function nextRandom(state: number): { state: number; value: number } {
+	const nextState = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+	return { state: nextState, value: nextState / 2 ** 32 };
+}
 
 function createController(kind: ControllerKind): ControllerState {
 	return {
@@ -147,7 +162,7 @@ function createClient(kind: ControllerKind, workers: number): ClientState {
 	return { strategy: kind, endpoints: Array.from({ length: workers }, () => createEndpoint(kind)) };
 }
 
-export function createInitialState(strategy: ControllerKind = "rate"): SimulationState {
+export function createInitialState(strategy: ControllerKind = "rate", randomSeed = DEFAULT_RANDOM_SEED): SimulationState {
 	return {
 		strategy,
 		clients: [createClient(strategy, 4)],
@@ -166,14 +181,20 @@ export function createInitialState(strategy: ControllerKind = "rate"): Simulatio
 		dropped: 0,
 		completed: 0,
 		sentRate: 0,
+		p50LatencyMs: null,
+		p99LatencyMs: null,
+		utilisation: 0,
+		randomSeed: randomSeed >>> 0,
+		randomState: randomSeed >>> 0,
+		performanceJitter: 0.08,
 		nowMs: 0,
 	};
 }
 
-export function sampleTwo(workerCount: number): number[] {
-	const first = Math.floor(Math.random() * workerCount);
+export function sampleTwo(workerCount: number, random: () => number): number[] {
+	const first = Math.floor(random() * workerCount);
 	if (workerCount === 1) return [first];
-	const other = Math.floor(Math.random() * (workerCount - 1));
+	const other = Math.floor(random() * (workerCount - 1));
 	return [first, other >= first ? other + 1 : other];
 }
 
@@ -185,13 +206,13 @@ export function chooseEndpoint(endpoints: EndpointState[], inFlights: number[], 
 		: nowMs >= endpoints[worker].tatMs);
 }
 
-function randomPerformance(): number {
-	return 0.75 + Math.random() * 0.5;
+function randomPerformance(random: () => number): number {
+	return 0.75 + random() * 0.5;
 }
 
-function fluctuatePerformance(performance: number): number {
+function fluctuatePerformance(performance: number, random: () => number, jitterScale: number): number {
 	const meanReversion = (1 - performance) * 0.08;
-	const jitter = (Math.random() - 0.5) * 0.08;
+	const jitter = (random() - 0.5) * jitterScale;
 	return clamp(performance + meanReversion + jitter, 0.75, 1.25);
 }
 
@@ -215,6 +236,18 @@ export function serviceCapacity(state: SimulationState, performance = state.work
 	), 0);
 }
 
+function percentile(samples: number[], fraction: number): number | null {
+	if (samples.length === 0) return null;
+	const sorted = [...samples].sort((a, b) => a - b);
+	return sorted[Math.ceil(fraction * sorted.length) - 1];
+}
+
+export function jainFairness(values: number[]): number | null {
+	const sum = values.reduce((total, value) => total + value, 0);
+	const squares = values.reduce((total, value) => total + value ** 2, 0);
+	return squares === 0 ? null : sum ** 2 / (values.length * squares);
+}
+
 export function summarizeMetrics(history: MetricBucket[], nowMs: number) {
 	const durationMs = Math.min(nowMs, DISPLAY_WINDOW_MS);
 	const totals = history.reduce((sum, bucket) => ({
@@ -224,11 +257,53 @@ export function summarizeMetrics(history: MetricBucket[], nowMs: number) {
 		latencySumMs: sum.latencySumMs + bucket.latencySumMs,
 	}), { sent: 0, completed: 0, rejected: 0, latencySumMs: 0 });
 	const outcomes = totals.completed + totals.rejected;
+	const latencySamplesMs = history.flatMap((bucket) => bucket.latencySamplesMs ?? []);
+	const workerSamples = history.flatMap((bucket) => bucket.workerBusy ?? []);
 	return {
 		sentRate: durationMs > 0 ? totals.sent * 1000 / durationMs : 0,
 		completedRate: durationMs > 0 ? totals.completed * 1000 / durationMs : 0,
 		rejectionRate: outcomes > 0 ? totals.rejected / outcomes : null,
 		latencyMs: totals.completed > 0 ? totals.latencySumMs / totals.completed : null,
+		p50LatencyMs: percentile(latencySamplesMs, 0.5),
+		p99LatencyMs: percentile(latencySamplesMs, 0.99),
+		utilisation: workerSamples.length > 0 ? workerSamples.filter(Boolean).length / workerSamples.length : 0,
+	};
+}
+
+function summarizeEndpointBuckets(buckets: EndpointMetricBucket[], durationMs: number) {
+	const totals = buckets.reduce((sum, bucket) => ({
+		sent: sum.sent + bucket.sent,
+		completed: sum.completed + bucket.completed,
+		rejected: sum.rejected + bucket.rejected,
+		latencySumMs: sum.latencySumMs + bucket.latencySumMs,
+		latencySamplesMs: [...sum.latencySamplesMs, ...(bucket.latencySamplesMs ?? [])],
+	}), { sent: 0, completed: 0, rejected: 0, latencySumMs: 0, latencySamplesMs: [] as number[] });
+	const outcomes = totals.completed + totals.rejected;
+	return {
+		...totals,
+		sentRate: totals.sent * 1000 / Math.max(durationMs, TICK_MS),
+		completedRate: totals.completed * 1000 / Math.max(durationMs, TICK_MS),
+		rejectionRate: outcomes > 0 ? totals.rejected / outcomes : null,
+		latencyMs: totals.completed > 0 ? totals.latencySumMs / totals.completed : null,
+		p99LatencyMs: percentile(totals.latencySamplesMs, 0.99),
+	};
+}
+
+export function summarizeBreakdown(state: SimulationState) {
+	const durationMs = Math.min(state.nowMs, DISPLAY_WINDOW_MS);
+	const endpoint = state.clients.map((_, client) => Array.from({ length: state.workers }, (_, worker) =>
+		summarizeEndpointBuckets(state.metricHistory.map((bucket) => bucket.endpoints?.[client]?.[worker]).filter((bucket): bucket is EndpointMetricBucket => bucket !== undefined), durationMs)));
+	const byClient = endpoint.map((workers) => summarizeEndpointBuckets(workers.map((summary) => summary), durationMs));
+	const byWorker = Array.from({ length: state.workers }, (_, worker) => {
+		const summary = summarizeEndpointBuckets(endpoint.map((clients) => clients[worker]), durationMs);
+		const busySamples = state.metricHistory.map((bucket) => bucket.workerBusy?.[worker]).filter((busy): busy is boolean => busy !== undefined);
+		return { ...summary, utilisation: busySamples.length > 0 ? busySamples.filter(Boolean).length / busySamples.length : 0 };
+	});
+	return {
+		byClient,
+		byWorker,
+		clientThroughputFairness: jainFairness(byClient.map((client) => client.completedRate)),
+		workerThroughputFairness: jainFairness(byWorker.map((worker) => worker.completedRate)),
 	};
 }
 
@@ -398,7 +473,7 @@ function updateEndpoints(
 }
 
 export function setStrategy(current: SimulationState, strategy: ControllerKind): SimulationState {
-	const next = createInitialState(strategy);
+	const next = createInitialState(strategy, current.randomSeed);
 	return {
 		...next,
 		workers: current.workers,
@@ -442,8 +517,14 @@ export function setWorkerCount(current: SimulationState, count: number): Simulat
 		return current;
 	}
 
+	let randomState = current.randomState;
+	const random = () => {
+		const next = nextRandom(randomState);
+		randomState = next.state;
+		return next.value;
+	};
 	const workerPerformance = workers > current.workers
-		? [...current.workerPerformance, ...Array.from({ length: workers - current.workers }, randomPerformance)]
+		? [...current.workerPerformance, ...Array.from({ length: workers - current.workers }, () => randomPerformance(random))]
 		: current.workerPerformance.slice(0, workers);
 	// Removed endpoints fail locally; already assigned jobs never jump queues.
 	const jobs = current.jobs.filter((job) => job.service < workers);
@@ -454,7 +535,7 @@ export function setWorkerCount(current: SimulationState, count: number): Simulat
 			: client.endpoints.slice(0, workers),
 		pendingChoices: client.pendingChoices?.filter((worker) => worker < workers),
 	}));
-	return { ...current, clients, workers, workerPerformance, jobs,
+	return { ...current, clients, workers, workerPerformance, randomState, jobs,
 		cancelled: current.cancelled + current.jobs.length - jobs.length,
 		queueDepth: jobs.filter((job) => job.stage === "queue").length };
 
@@ -462,7 +543,13 @@ export function setWorkerCount(current: SimulationState, count: number): Simulat
 
 export function advanceSimulation(current: SimulationState): SimulationState {
 	const nowMs = current.nowMs + TICK_MS;
-	const workerPerformance = current.workerPerformance.map(fluctuatePerformance);
+	let randomState = current.randomState;
+	const random = () => {
+		const next = nextRandom(randomState);
+		randomState = next.state;
+		return next.value;
+	};
+	const workerPerformance = current.workerPerformance.map((performance) => fluctuatePerformance(performance, random, current.performanceJitter));
 	const completedSamples: Array<{ client: number; service: number; rttMs: number; dropped: boolean }> = [];
 	const progressedJobs = current.jobs
 		.map((job): Job | null => {
@@ -490,6 +577,17 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 		.filter((job): job is Job => job !== null);
 
 	let jobs = [...progressedJobs];
+	// An idle worker accepts one request before its bounded waiting queue is
+	// checked. WORKER_QUEUE_LIMIT therefore means four waiting slots in addition
+	// to the request actively being dispatched or processed.
+	const initiallyOccupiedWorkers = new Set(
+		jobs.filter((job) => (job.stage === "service" || job.stage === "serviceDispatch")).map((job) => job.service),
+	);
+	for (let worker = 0; worker < current.workers; worker++) {
+		if (initiallyOccupiedWorkers.has(worker)) continue;
+		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue" && job.service === worker);
+		if (nextJobIndex !== -1) jobs[nextJobIndex] = { ...jobs[nextJobIndex], stage: "serviceDispatch", queueSlot: 0, remainingMs: WORKER_TRAVEL_MS };
+	}
 	const waitingJobs = jobs.filter((job) => job.stage === "queue");
 	const rejectedJobs = Array.from({ length: current.workers }, (_, worker) =>
 		waitingJobs.filter((job) => job.service === worker).slice(WORKER_QUEUE_LIMIT)
@@ -499,22 +597,6 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 	}
 	const rejectedIds = new Set(rejectedJobs.map((job) => job.id));
 	jobs = jobs.filter((job) => !rejectedIds.has(job.id));
-
-	const occupiedWorkers = new Set(
-		jobs
-			.filter((job) => (job.stage === "service" || job.stage === "serviceDispatch") && job.service !== undefined)
-			.map((job) => job.service),
-	);
-	const availableWorkers = Array.from({ length: current.workers }, (_, worker) => worker)
-		.filter((worker) => !occupiedWorkers.has(worker));
-	for (const worker of availableWorkers) {
-		const nextJobIndex = jobs.findIndex((job) => job.stage === "queue" && job.service === worker);
-		if (nextJobIndex === -1) continue;
-		jobs[nextJobIndex] = {
-			...jobs[nextJobIndex], stage: "serviceDispatch", queueSlot: 0,
-			remainingMs: WORKER_TRAVEL_MS,
-		};
-	}
 
 	const sentByClient = current.clients.map(() => Array(current.workers).fill(0) as number[]);
 	let nextJobId = current.nextJobId;
@@ -531,7 +613,7 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 		const client = clients[clientIndex];
 		const inFlights = client.endpoints.map((_, worker) => jobs.filter((job) => job.client === clientIndex && job.service === worker).length);
 		for (let attempt = 0; attempt < current.workers * MAX_CONTROLLER_LIMIT; attempt++) {
-			const choices = client.pendingChoices?.length ? client.pendingChoices : sampleTwo(current.workers);
+			const choices = client.pendingChoices?.length ? client.pendingChoices : sampleTwo(current.workers, random);
 			const worker = chooseEndpoint(client.endpoints, inFlights, choices, client.strategy, nowMs);
 			if (worker === undefined) {
 				client.pendingChoices = choices;
@@ -558,14 +640,19 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 			completed: successful.length,
 			rejected: rejected.length,
 			latencySumMs: successful.reduce((total, sample) => total + sample.rttMs, 0),
+			latencySamplesMs: successful.map((sample) => sample.rttMs),
 		};
 	}));
+	const workerBusy = Array.from({ length: current.workers }, (_, worker) => jobs.some((job) =>
+		job.service === worker && (job.stage === "service" || job.stage === "serviceDispatch")));
 	const metricHistory = [...current.metricHistory.filter((bucket) => bucket.atMs > nowMs - DISPLAY_WINDOW_MS), {
 		atMs: nowMs,
 		sent: sentByClient.flat().reduce((total, count) => total + count, 0),
 		completed: successfulSamples.length,
 		rejected: rejectedJobs.length,
 		latencySumMs: successfulSamples.reduce((total, sample) => total + sample.rttMs, 0),
+		latencySamplesMs: successfulSamples.map((sample) => sample.rttMs),
+		workerBusy,
 		endpoints: endpointMetrics,
 	}];
 
@@ -573,6 +660,7 @@ export function advanceSimulation(current: SimulationState): SimulationState {
 		...current,
 		clients,
 		workerPerformance,
+		randomState,
 		jobs,
 		nextJobId,
 		queueDepth,

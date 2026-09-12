@@ -41,3 +41,20 @@ test("lesson conditions do not begin before the CTA action", () => {
 	progress = updateConditionProgress(conditions, progress, changed, baseline, true);
 	assert.equal(progress.changed.completedAtMs, 10_000);
 });
+
+test("lesson conditions can require a change from the action-time baseline", () => {
+	const conditions = [{
+		id: "growth",
+		label: "Queue grew",
+		description: "Add four waiting requests.",
+		when: (state, baseline) => state.queueDepth >= baseline.queueDepth + 4,
+	}];
+	const baseline = { ...createInitialState(), nowMs: 10_000, queueDepth: 5 };
+	const unchanged = { ...baseline, nowMs: 10_250 };
+	const changed = { ...baseline, nowMs: 10_500, queueDepth: 9 };
+	let progress = createConditionProgress(conditions);
+	progress = updateConditionProgress(conditions, progress, unchanged, baseline, true);
+	assert.equal(progress.growth.completedAtMs, null);
+	progress = updateConditionProgress(conditions, progress, changed, baseline, true);
+	assert.equal(progress.growth.completedAtMs, 10_500);
+});

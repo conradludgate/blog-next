@@ -50,13 +50,13 @@ So our problem is not whether requests should ever wait. They inevitably will. T
 
 The rest of the article will answer those questions by changing one part of a running system at a time. The clock will continue to move, but every experiment will ask you to perturb the system and watch how it responds.
 
-## A limit that worked yesterday
+## 1. A limit that worked yesterday
 
 Start with one client and four workers. Every coloured dot is a request, and every worker has a small queue of its own. The client samples two workers and uses its own latency and in-flight observations to choose between them. That routing policy stays the same throughout these experiments.
 
 First we limit how often requests can start. Each client may send at most half a request per second to each worker. This is a local budget: adding another client adds another set of budgets. No existing client is told to give up part of its allowance.
 
-Each section introduces a fresh copy of the same simulator, already configured for the idea beside it. The controls do not perform a scripted demonstration: the experiment describes an outcome, and you must decide which ordinary client, worker, processing-time, or controller control will produce it. The checks turn green only after the simulator observes the result.
+Each interactive section introduces a fresh copy of the same simulator, already configured for the idea beside it. The controls do not perform a scripted demonstration: the experiment describes an outcome, and you must decide which ordinary client, worker, processing-time, or controller control will produce it. The checks turn green only after the simulator observes the result.
 
 Watch **completed throughput** as well as offered load. More arrivals do not necessarily mean more useful work. The queue shows waiting directly, while duration includes the time successful requests spend getting to the worker, waiting, and being processed.
 
@@ -66,348 +66,379 @@ Concurrency connects rate and duration: in steady state, average work in flight 
 
 We now have the central question for the rest of the article: **which observation should make a client change its limit?** Loss provides an explicit signal, but only after a queue refuses work. Delay can warn earlier, but separating service time from queueing—and sharing capacity fairly—takes more care.
 
-The remaining sections are development briefs for expanding these experiments, rather than finished prose.
+The rest of the article follows that question through increasingly realistic models. Each step keeps the routing topology fixed unless it is the thing being studied, so an improvement in admission control is not accidentally credited to a better load balancer.
 
 ## Act one: learn to see congestion
 
-## 2. Make the work visible
+### 2. Make the work visible
 
-*Story:* A request is not an abstract counter. It spends time on the network, waiting in a queue, and being processed. Only the last part performs useful service work, but the caller experiences all three as latency.
+A request is not an abstract counter. From the client’s point of view it begins when the call is admitted and ends when the response returns. In between, it passes through several distinct stages:
 
-*Simulator:* Add a pause control and a stage inspector. Pausing freezes motion without discarding state; selecting a job shows its network time, queue time, service time, and total round-trip time.
+1. travel from the client to the chosen worker;
+2. wait in that worker’s queue;
+3. receive service from the worker; and
+4. travel back to the client.
 
-*CTA:* Pause while a job is waiting, inspect its timeline, then resume until it completes. Compare its service time with the duration observed by the client.
+Only the third stage performs the useful work that the worker exists to do. All four consume the request’s deadline, and the client normally observes only their sum.
 
-*Completion checks:* The selected job must show non-zero queue time; its total RTT must exceed its service time.
+That distinction matters whenever we interpret latency. Suppose a worker takes one second to process a request. An observed duration of three seconds does not mean the operation itself became three times as expensive. The request may have spent two seconds waiting behind earlier work. Conversely, a worker can become slower without forming a queue if admissions fall quickly enough. The same end-to-end metric can therefore describe different internal states.
 
-*Exit:* Once latency is decomposed, the queue becomes visible as both stored work and added duration.
+Throughout the visualisations, moving dots are requests. A dot crossing the middle is in the network or being routed; a dot parked in front of a worker is queued; a dot attached to a worker is being processed. Pausing freezes the motion without changing the model. This is not just decoration: the physical position of a request explains why its measured duration can be much greater than its service time.
 
-## 3. Name the health signals
+Once we can see the stages, queueing latency stops being mysterious. It is simply stored unfinished work, paid for one request at a time.
 
-*Story:* Introduce RED for request health—rate, errors, duration—and USE for resource health—utilisation, saturation, errors. Neither family is sufficient alone: a worker can be fully utilised with good latency, or the request path can be slow while workers appear healthy because work is waiting elsewhere.
+### 3. Name the health signals
 
-*Simulator:* Group metrics explicitly. RED shows offered/completed rate, rejected work, and latency percentiles. USE shows busy workers, jobs waiting, and worker failures. Avoid a single green/red health verdict that hides trade-offs.
+We need more than one number to describe whether this system is behaving well. Two familiar sets of signals give us a useful vocabulary.
 
-*CTA:* Remove a worker and describe the result using one RED signal and one USE signal. Add it back and watch which measurement recovers first.
+**RED** describes the request path:
 
-*Completion checks:* Name a request metric (rate, errors, or duration) and a resource metric (utilisation, saturation, or errors); after recovery, show which returns to baseline first.
+- **Rate:** how much work is offered and how much completes.
+- **Errors:** how much work is rejected or fails.
+- **Duration:** how long successful work takes, usually including tail percentiles such as p99.
 
-*Exit:* We now have the vocabulary to say what a limiter improves and what it merely moves around.
+**USE** describes the worker resources:
+
+- **Utilisation:** how much of the available service capacity is busy.
+- **Saturation:** how much work is waiting for that capacity.
+- **Errors:** whether the resource itself is failing work.
+
+Neither family is sufficient alone. A worker can be fully utilised while every request completes with excellent latency; 100% utilisation is not automatically an incident. A request path can also be slow while workers appear under-utilised because the waiting occurs in a client, connection pool, or network queue that the worker cannot see.
+
+The simulator therefore avoids one synthetic “health” score. The top-level metrics report completed and offered rate, rejection, duration, utilisation, and queue depth separately. Endpoint details then break those observations down by client and worker. When a later controller improves p99 latency, we will still ask whether it did so by preserving useful throughput or merely by leaving workers idle.
+
+This vocabulary also makes recovery less ambiguous. Errors may stop as soon as a bounded queue is no longer full, while latency remains elevated until the existing queue drains. A single green light would hide that interval. RED and USE let us say precisely what recovered, and what has not.
 
 ## Act two: build a realistic request path
 
-## 4. Open the load balancer
+### 4. Open the load balancer
 
-*Story:* Contrast the implemented per-worker topology with an idealised shared queue. In a horizontally scaled service, workers normally accept connections or requests independently and have separate queues. A load balancer chooses where work goes; it does not magically pool every worker’s capacity behind one perfectly fair FIFO.
+It is tempting to draw a horizontally scaled service as one queue feeding a bank of interchangeable workers. That model quietly gives the load balancer powers that real deployments often do not have.
 
-*Simulator:* Animate the shared queue splitting into one small bounded queue per worker. The client receives a changing endpoint set from service discovery and can address workers directly. A network load balancer may still exist for reachability, but it no longer owns scheduling state.
+Workers normally accept connections or requests independently. Each has its own executor, connection limits, and bounded queue. Once a request has been sent to worker 1, worker 2 cannot reach across the network and take it simply because it became idle first. A proxy can maintain a centralised queue, but that is a deliberate architecture with its own memory, availability, fairness, and head-of-line-blocking trade-offs—not a free property of load balancing.
 
-*CTA:* Press “open the load balancer.” The same jobs and workers remain, but queued jobs are now attached to the worker that was selected for them.
+Our clients instead learn a set of worker endpoints and choose one for each request. A network load balancer may still provide reachability, but the client owns the scheduling decision and every queued request is attached to the worker already selected for it.
 
-*Completion checks:* Every queued job must name one worker; find an idle worker while another worker retains queued work.
+This creates a state that aggregate dashboards can obscure: one worker can be idle while another still has queued work. Total capacity exists, but it is in the wrong place for the decisions we already made. Admission control and placement must therefore be designed together.
 
-*Exit:* Once placement is irreversible, a free worker can coexist with work waiting behind a busy one.
+### 5. Random placement can waste capacity
 
-## 5. Random placement can waste capacity
+Uniform random placement is attractive because it is simple, stateless, and unbiased over a long period. Unfortunately, requests do not experience the long-run average. They experience one particular sequence of choices.
 
-*Story:* Uniform random selection is simple and unbiased over time, but individual decisions still cluster. With short queues and variable service times, a few unlucky choices create head-of-line waiting while another worker is idle.
+Even when offered load is below total service capacity, independent random choices sometimes cluster on the same worker. With short queues and variable service times, those small clusters create head-of-line waiting while another worker is ready. The average throughput may still look fine, but the unlucky requests inflate the latency tail.
 
-*Simulator:* Hold total offered load below total service capacity. Route each job to a uniformly random worker and plot queue depth per worker rather than only the sum.
+Making the queue global would hide this placement error by allowing the next available worker to take any job. In our per-worker topology the client needs to avoid creating the imbalance in the first place. It needs a better choice that remains cheap and decentralized.
 
-*CTA:* Run three identical trials. Look for a moment where at least one worker is idle while another has queued work, then compare the latency tails between trials.
+### 6. Two random choices are surprisingly powerful
 
-*Completion checks:* Capture one imbalanced moment in at least two trials; compare the slowest successful request, not only average throughput.
+The “Power of Two Choices” rule makes one small change: sample two distinct workers at random, compare them, and send the request to the better candidate. That extra observation dramatically reduces accidental concentration while retaining constant decision cost and avoiding a scan across the whole fleet.
 
-*Exit:* Aggregate capacity is not enough; the client needs a cheap way to make a better local placement decision.
+We still need to define “better.” Choosing the endpoint with the lowest raw latency is not enough. A naturally fast worker may already have many requests in flight, while a slightly slower worker is idle. A useful first approximation is:
 
-## 6. Two random choices are surprisingly powerful
+```text
+score = (in_flight + 1) × smoothed_RTT
+```
 
-*Story:* Sample two healthy workers and choose the better candidate. This retains randomness and constant decision cost while sharply reducing accidental concentration. “Better” should not mean raw latency alone: a naturally fast worker may already be overloaded.
+The `+1` estimates the cost of the request we are about to add. Multiplying by recent round-trip time combines how much work is ahead of us with roughly how expensive that work has been. The score is deliberately local: two clients can assign different scores to the same worker because they have seen different requests.
 
-*Simulator:* Add a routing toggle between Random and Power of Two. Draw the two sampled candidates briefly, then highlight the winner. Begin with a score such as `(in-flight + 1) × smoothed RTT`, which estimates the cost of joining each worker.
+Power of Two will be the common routing layer for the rest of the article. When we compare rate, concurrency, and adaptive controllers, they all receive the same two candidates and the same placement rule. That keeps us from crediting admission control for an improvement that actually came from better routing.
 
-*CTA:* Create one slow worker, switch between Random and Power of Two, and compare per-worker queue depth and p99 latency under the same demand.
+*Reference:* [Mitzenmacher’s original treatment of the Power of Two Choices](https://www2.eecs.berkeley.edu/Pubs/TechRpts/1996/7979.html) develops the randomized-allocation result behind this routing rule.
 
-*Completion checks:* Under Power of Two, the slow worker must receive less new work or carry a smaller queue than under Random; record the p99 change.
+### 7. Every endpoint needs local memory
 
-*Exit:* Power of Two becomes the common routing layer for every controller that follows. From here on, controller comparisons change admission policy without quietly changing load-balancing quality.
+A service-wide average cannot support that decision. The client needs an endpoint table containing at least:
 
-## 7. Every endpoint needs local memory
+- requests currently in flight;
+- a recent latency estimate;
+- recent successes and failures;
+- the age of the last observation; and
+- eventually, that endpoint’s congestion-control state.
 
-*Story:* The client cannot make a latency-aware choice from one service-wide average. It needs state for each worker: in-flight requests, recent latency, failures, last observation time, and eventually a controller limit. With many clients and workers, this state exists independently for every client–worker pair.
+This table exists per client. With `C` clients and `W` workers, there are `C × W` independently evolving client–worker relationships. Two clients may hold different RTT estimates and different limits for the same worker because neither observes the other’s requests directly.
 
-*Simulator:* Selecting a client reveals its endpoint table. Selecting a worker shows that different clients can hold different RTT estimates and limits for the same server. Newly discovered workers start visibly “cold” rather than inheriting fleet-wide knowledge.
+Newly discovered endpoints begin cold. They must not silently inherit the fleet average: a replacement instance might have different hardware, a cold cache, or a failure mode that the existing workers do not share. Nor should a cold endpoint be treated as infinitely bad and starved of the requests needed to measure it.
 
-*CTA:* Add a worker and inspect it from two clients. Send a few requests and watch their endpoint estimates warm independently.
-
-*Completion checks:* The new endpoint begins cold for both clients; each client later records its own RTT and controller state rather than sharing one estimate.
-
-*Exit:* Routing and congestion control use the same observations, but they answer different questions: where should this request go, and is it safe to send now?
+Routing and congestion control use this same memory but answer different questions. Routing asks, “which of these candidates looks better?” Congestion control asks, “is it safe to send another request there at all?” Keeping those questions separate will become important when both sampled workers are busy.
 
 ## Act three: fixed limits meet a changing fleet
 
-## 8. The fixed-rate baseline
+### 8. The fixed-rate baseline
 
-*Story:* A rate limiter answers only “how often may I start work?” It does not care whether the selected worker is fast, slow, empty, queued, or recently replaced. Apply the limit per worker so adding endpoints increases possible aggregate throughput rather than silently dividing one static global budget.
+A rate limiter answers a narrow question: how often may this client start work? It does not care whether the selected worker is fast, slow, idle, queued, or recently replaced. That simplicity is useful. A fixed rate is easy to reason about, easy to enforce, and often entirely adequate when the environment is stable.
 
-*Simulator:* Power of Two selects the endpoint; a per-worker token clock admits work at a fixed rate. Display both the configured per-worker rate and the resulting fleet-wide offered rate.
+We apply the limit per worker rather than dividing one global client budget across the discovered endpoints. If one client may send `0.5` requests per second to each of four workers, its maximum aggregate rate is `2/s`. Adding a worker adds another `0.5/s` budget, allowing the client to discover new service capacity without reconfiguring its global rate.
 
-*CTA:* Hold the worker set constant and raise the per-worker rate until queues appear. Reduce it until the system is stable again.
+The cost of that convenience is an assumption: `0.5/s` must be safe for every worker and the total contributed by every client must remain safe for the fleet. The number was tuned against one particular client count, worker count, and processing-time distribution. Nothing in the limiter tells it when those assumptions stop being true.
 
-*Completion checks:* Mark the first sustained queue or rejection; after reducing the rate, sustain an empty queue and zero rejection for five seconds.
+### 9. Horizontal clients multiply the rate
 
-*Exit:* The safe number came from manual tuning against one particular fleet shape.
+A reasonable local rate becomes a much larger system-wide rate when the client service scales horizontally. Every new client creates its own endpoint table and its own complete set of rate budgets. Existing clients do not know that they should surrender part of theirs.
 
-## 9. Horizontal clients multiply the rate
+With four workers and a `0.5/s` per-endpoint rate, one client can offer `2/s`. Two clients can offer `4/s`; eight can offer `16/s`. Autoscaling the caller has multiplied pressure on the callee even though no configuration value changed.
 
-*Story:* A reasonable limit on one client becomes a larger system-wide limit when that client is replicated. Eight clients each independently sending `0.5/s` to each worker do not know that they collectively offer eight times the load of one client.
-
-*Simulator:* Add clients without changing any existing client’s configuration. Attribute requests by client colour and show per-client plus total offered rate.
-
-*CTA:* Add clients one at a time. Predict the total rate before each click, then keep going until worker queues or rejections appear.
+Run the experiment, then add clients one at a time. Predict the total offered rate before each click. Continue until waiting persists and the bounded queues begin to reject work.
 
 <CongestionSimulator challenge="fixed-rate-client-scale" />
 
-*Completion checks:* Total offered rate grows with every added client; complete the step only after queueing or rejection persists for five seconds.
+The checks deliberately require a sustained observation. A queue containing one request for a single tick may be harmless scheduling noise; a queue that stays occupied for five seconds is a changed operating point. Notice that completed throughput eventually stops tracking offered throughput. Extra admissions are buying delay and rejection, not more useful capacity.
 
-*Exit:* A fixed per-client limit encodes an assumption about client count that autoscaling is free to invalidate.
+A fixed per-client rate therefore encodes an assumption about client count that autoscaling is free to invalidate.
 
-## 10. More workers change the answer too
+### 10. More workers change the answer too
 
-*Story:* Scaling the service in either direction invalidates yesterday’s rate. Adding workers leaves capacity unused unless clients discover and use them; removing workers concentrates the same demand onto fewer queues.
+Scaling the worker service changes the correct answer in the other direction. A single global rate cannot use new capacity unless someone increases it. A per-worker rate discovers added capacity naturally, but removing workers also removes their budgets and concentrates existing work onto the survivors.
 
-*Simulator:* Endpoint discovery adds and removes workers while traffic continues. Removing a worker drains or fails its assigned work explicitly rather than teleporting jobs to another queue.
+Removal has awkward transient semantics too. Requests already assigned to a departing worker cannot be teleported into another queue. They must finish while the endpoint drains, be cancelled, or fail and re-enter the normal retry and admission path. Pretending otherwise makes scale-down look much safer than it is.
 
-*CTA:* Double the workers and observe under-utilisation under a global fixed rate, then use a per-worker rate and observe the opposite scaling behaviour. Remove half the workers without changing clients.
+We now have incompatible requirements for a static number. It should grow when workers are added, shrink when clients are added, and change again when either side is removed. Replica counts are only proxies for the capacity and demand we actually care about. Even perfect discovery cannot make a fixed rate adapt to the next problem: a worker whose speed changes in place.
 
-*Completion checks:* With a global rate, added workers must leave spare capacity; with a per-worker rate, verify that both capacity and offered load change; after removal, show the affected queues or cancellations.
+### 11. Processing time is not constant
 
-*Exit:* The limit must adapt to both sides of the topology, not merely be divided by a deployment replica count.
+Capacity changes even when replica counts do not. Cache misses, noisy neighbours, garbage collection, heterogeneous hardware, and differences in request cost all change service time. A rate that was conservative a moment ago can become excessive without any deployment or discovery event.
 
-## 11. Processing time is not constant
-
-*Story:* Capacity changes even when replica counts do not. Cache misses, noisy neighbours, garbage collection, heterogeneous hardware, and request cost all change service time. An arrival rate that was safe a moment ago can start building queues without any configuration event.
-
-*Simulator:* Begin below capacity, then let the reader change processing time without changing the rate or topology. A later experiment will make individual workers drift independently and ask the reader to identify the slow one from RED and USE.
-
-*CTA:* Keep the controller, client count, and worker count fixed. Increase processing time and wait for the unchanged rate to create a persistent queue and then rejection.
+The next experiment begins below capacity. Keep the controller and topology fixed, start the simulation, and change service time from one second to three seconds. The configured arrival rate will not move. Watch utilisation, waiting, duration, and finally rejection respond in that order.
 
 <CongestionSimulator challenge="fixed-rate-slowdown" />
 
-*Completion checks:* Processing time changes while the rate does not; waiting persists for five seconds; rejection follows.
+The first visible effect is not necessarily an error. Workers remain busy for longer, so the same arrivals begin to occupy their queues. Duration rises before the hard queue limit is reached; only then does rejection appear. A loss-only alarm sees the last stage of the problem.
 
-*Exit:* Rate controls arrivals, but it does not directly bound the amount of unfinished work created by slower responses.
+Rate controls arrivals, but it does not directly bound the amount of unfinished work created by slower responses.
 
-## 12. The bounded queues have a job to do
+### 12. The bounded queues have a job to do
 
-*Story:* A bounded queue converts unlimited waiting into explicit rejection. That protects memory and prevents arbitrarily stale work, but a non-full queue can already be harmful: every occupied slot represents additional latency.
+A bounded queue converts unlimited waiting into explicit rejection. That protects memory, connections, and deadline budget from growing without limit. It also provides an unambiguous signal that a particular worker could not accept more work.
 
-*Simulator:* Give each worker a short FIFO with a visible hard edge. Rejected jobs return to their originating client, and errors remain attributed to the selected endpoint.
+The bound is protection, not a target. A queue does not need to be full before it becomes harmful. Every occupied slot represents a request paying additional latency without increasing the worker’s instantaneous throughput. When demand falls, rejection stops as soon as space reappears, but duration remains elevated until the old work drains.
 
-*CTA:* Increase demand until only one worker rejects work, then reduce demand by one step. Watch errors stop before latency returns to baseline.
+This is why the simulator attributes rejections to the selected worker and keeps them separate from cancellations caused by topology changes. A controller can learn from a worker refusing work; it should not interpret a client being removed as evidence that the worker is overloaded.
 
-*Completion checks:* Attribute rejection to one worker; after lowering demand, keep errors at zero while duration remains above the original baseline.
+Loss is therefore both valuable and late. We should use it, but we can avoid depending on it as our first congestion signal.
 
-*Exit:* Rejection is valuable protection and a useful signal, but it arrives after the latency problem has already begun.
+### 13. Replace rate with work in flight
 
-## 13. Replace rate with work in flight
+A concurrency limit bounds requests that have started but not finished. A permit is associated with one endpoint and is returned only when that request completes or is rejected. A slow endpoint cannot consume the permits of a healthy neighbour.
 
-*Story:* A concurrency limit bounds requests started but not finished. When a worker slows down, requests occupy permits for longer and the client naturally starts fewer new ones. Keep the limit per worker so a slow endpoint cannot consume the permits of a healthy endpoint.
+This small change makes the admission rate sensitive to duration. If requests take three times as long, each permit remains occupied for roughly three times as long, so the client naturally starts work less often. We have not measured capacity or changed the configured limit; feedback arrives through the lifetime of the permit itself.
 
-*Simulator:* Retain Power of Two and replace the per-worker rate clock with a fixed in-flight window. Show permits attached to endpoint state and returned only on completion or rejection.
-
-*CTA:* Repeat the previous all-worker slowdown with fixed concurrency. Keep the one-client topology and watch offered rate, queue depth, and rejection.
+Repeat the same processing-time change with fixed concurrency. Keep the one-client topology, run the experiment, and slow service to three seconds. Compare offered rate, queue depth, and rejection with the fixed-rate result above.
 
 <CongestionSimulator challenge="concurrency-slowdown" />
 
-*Completion checks:* Offered rate falls below one request per second; the server queue remains empty and rejection stays at zero for five seconds.
+The fixed window does not make the worker faster. Instead, offered rate falls because unfinished requests retain their places in the window. In this scenario that keeps the server queues empty and avoids sustained rejection.
 
-*Exit:* Concurrency reacts automatically to duration, but someone still has to choose the window size.
+Concurrency is already a feedback mechanism, but it is incomplete. Someone still has to choose the size of the window. Too small wastes capacity; too large recreates the queue we were trying to avoid.
 
-## 14. Little’s Law connects the measurements
+### 14. Little’s Law connects the measurements
 
-*Story:* In steady state, `L = λW`: concurrency is throughput multiplied by latency. The relationship explains why a fixed window becomes an implicit variable rate and gives us a way to turn a fractional target such as `1.3` requests in flight into paced admissions.
+Little’s Law relates the quantities we can observe:
 
-*Simulator:* For the selected client–worker pair, place measured `L`, `λ`, and `W` beside the equation. Distinguish observed in-flight work from the controller’s target rather than rounding the target to an integer semaphore.
+```text
+L = λW
+```
 
-*CTA:* Hold one worker steady and adjust its target window. Check whether measured throughput × latency approaches observed concurrency after the transient settles.
+`L` is the average number of requests in the system, `λ` is completed throughput, and `W` is average time in the system. If an endpoint completes one request per second with an average round-trip time of 1.3 seconds, it will have about 1.3 requests in flight on average.
 
-*Completion checks:* After a stable window, `throughput × latency` should approximately match observed in-flight work; repeat at a second target.
+This explains why a fixed concurrency window becomes an implicit variable rate: rearranging the equation gives `λ = L / W`. As duration grows while `L` stays fixed, the achievable admission rate falls.
 
-*Exit:* Little’s Law translates units; it does not tell us which operating point is safe.
+The word “average” is important. A controller target of `1.3` requests is meaningful even though an individual request is indivisible. Rounding it to an integer throws away information and creates abrupt changes around every boundary. Later we will use the target and measured RTT to pace discrete requests at the corresponding average rate.
 
-## 15. Find the knee in each worker
+Little’s Law translates between units. It does not tell us whether `1.3` is a safe operating point. To choose a target, we first need to understand what happens as unfinished work increases.
 
-*Story:* Throughput initially rises with more in-flight work. Near capacity it flattens, while queueing latency begins to rise sharply. The useful operating point keeps a worker busy without paying for a persistent queue, and that point can differ between workers.
+*Reference:* John Little’s paper, [“A Proof for the Queuing Formula: L = λW”](https://pubsonline.informs.org/doi/10.1287/opre.9.3.383), establishes the relationship under broad steady-state conditions.
 
-*Simulator:* Sweep a selected worker’s concurrency target slowly and plot throughput against latency. Mark the unloaded baseline, first saturation, and first rejection without automatically declaring one universal optimum.
+### 15. Find the knee in each worker
 
-*CTA:* Increase the target in small increments. Stop where another increment adds latency but almost no completed throughput, then repeat for a slower worker.
+At low concurrency, adding another request in flight can increase throughput by keeping the worker busy across network gaps and scheduling delays. Eventually the worker reaches capacity. Beyond that point, extra concurrency mostly becomes a queue: throughput flattens while duration rises sharply.
 
-*Completion checks:* Record the first increment with sharply higher latency and little throughput gain; the slower worker should reach that point at a lower target.
+The bend between those regions is the **knee**. It is not one universal queue depth or utilisation percentage. A worker’s useful window depends on service time, internal parallelism, network delay, and the shape of its workload. Two nominally identical replicas can have different knees for long periods.
 
-*Exit:* A congestion controller automates this probing and retreat instead of baking the knee into configuration.
+We would like to operate near the knee: enough work in flight to keep capacity useful, but not enough to maintain a costly queue. A manually configured window can hit that point only for the conditions in which it was tuned.
+
+A congestion controller automates the search. It probes upward while the path appears healthy and retreats when its feedback says that added work has become waiting. Different controllers mainly disagree about which signal to trust and how quickly to respond.
 
 ## Act four: close the feedback loop
 
-## 16. AIMD learns from loss
+### 16. AIMD learns from loss
 
-*Story:* Additive increase, multiplicative decrease probes upward gradually and cuts its per-worker window when that worker rejects work. It is simple and robust, but its feedback is intentionally late: the queue must reach its hard edge before the client learns to retreat.
+Additive Increase, Multiplicative Decrease—AIMD—turns the fixed window into a feedback loop. Each successful request allows the responsible client–worker controller to increase cautiously. A rejection cuts that endpoint’s target by a proportion, making the retreat much faster than the probe.
 
-*Simulator:* Plot each endpoint window as a sawtooth. A rejected request flashes the responsible queue and the corresponding client–worker controller; unrelated endpoint windows do not reset.
+Over time the target traces a sawtooth: slow growth, a sharp drop, then slow growth again. The asymmetry is intentional. Capacity should be explored without producing a large burst, but evidence of overload should remove pressure quickly.
 
-*CTA:* Select AIMD and add clients until one worker rejects. Follow that endpoint’s window through the multiplicative decrease and slow recovery.
+The feedback remains local. A rejection from worker 2 reduces the window that this client uses for worker 2; it does not reset every endpoint in the client, much less every other client. That isolation is valuable when only one worker is slow, but it also means that every client must discover the congestion for itself.
 
-*Completion checks:* Capture a rejection, the responsible endpoint’s immediate lower limit, and at least one later additive increase; unrelated endpoints must not reset.
+AIMD is simple and robust, but its signal is deliberately late. The queue must reach its hard edge before a request is rejected. We already know that duration rises while the queue is filling, so perhaps the client can retreat before loss.
 
-*Exit:* If duration rises before loss, perhaps the client can retreat without requiring the service to reject anything.
+### 17. Vegas listens to delay
 
-## 17. Vegas listens to delay
+Vegas treats delay as an earlier congestion signal. For each endpoint it remembers the lowest round-trip time it has observed and compares that baseline with the current RTT. If the current sample is larger, the difference is presumed to be queueing.
 
-*Story:* Vegas estimates queued work from the gap between minimum RTT and current RTT. Expected throughput uses the minimum RTT; actual throughput uses the measured RTT. Their difference approximates how much of the window is waiting rather than making progress.
+For a target window `L`, the simulator estimates queued work as:
 
-*Simulator:* Reveal the selected endpoint’s minimum RTT, current RTT, calculated queue estimate, and lower/upper thresholds. Show exactly which completed samples trigger a limit change.
+```text
+queued ≈ L × (1 - minimum_RTT / current_RTT)
+```
 
-*CTA:* Slow one worker without filling its queue. Watch Vegas reduce only that endpoint’s target before the first rejection, then compare its latency and utilisation with AIMD.
+If the estimate is below a lower threshold, Vegas increases its target. If it is above an upper threshold, Vegas decreases it. Between the thresholds it holds steady. Successful RTT samples drive the estimate; rejection remains a harder signal that causes an immediate multiplicative backoff.
 
-*Completion checks:* The selected endpoint’s Vegas target must fall after RTT rises; verify that queueing/duration improves before sustained rejection, then compare completed throughput with AIMD.
+This can respond while a queue is forming rather than waiting for it to become full. Compared with AIMD, a well-calibrated delay controller can preserve similar useful throughput with lower p99 latency and much less loss.
 
-*Exit:* The earlier signal is attractive, but its meaning depends on the baseline and on what every other client is doing.
+The qualification matters. Vegas has not measured queue time directly. It inferred it from a baseline, and both the quality of that baseline and the behaviour of competing clients affect the result.
 
-## 18. Delay feedback is local
+*Reference:* Brakmo and Peterson introduced the delay-based mechanism in [“TCP Vegas: End to End Congestion Avoidance on a Global Internet”](https://doi.org/10.1109/49.464716).
 
-*Story:* Each client observes only its own requests. Two clients can infer different unloaded RTTs, smoothing histories, and safe limits for the same worker. Equal queueing delay therefore does not imply an equal share of capacity, and there is no hidden global reset that makes their controllers agree.
+### 18. Delay feedback is local
 
-*Simulator:* Pin two client–worker inspectors side by side. Preserve existing controller state when clients or workers elsewhere change; never silently redistribute windows to make the graph look fair.
+Every client observes only its own requests. Two clients can infer different minimum RTTs, build different smoothing histories, and settle on different limits for the same worker. There is no global coordinator quietly dividing capacity into equal shares.
 
-*CTA:* Add two clients one at a time and compare the new endpoint histories with the established clients after total throughput has stabilised.
+That independence is easy to lose in a simulation. When a client is added here, existing clients retain their endpoint histories and limits. The newcomer begins cold. When a worker is added, each client receives a new cold endpoint without resetting its knowledge of the old ones.
+
+Start the next experiment and add two clients. Open the endpoint details after their tables have warmed. Compare their limits and completed rates rather than looking only at aggregate throughput.
 
 <CongestionSimulator challenge="vegas-client-scale" />
 
-*Completion checks:* Show distinct minimum RTTs or limits for the same worker; report each client’s completed-rate share and the Jain fairness score.
+The controller targets do not need to match for aggregate throughput to look stable. That is precisely the point: a local measurement can be internally consistent while still encoding an accident of arrival order. The fairness values in endpoint details make that difference visible instead of averaging it away.
 
-*Exit:* A local measurement can be internally consistent while still encoding an accident of arrival order.
+### 19. Why a clean minimum RTT is hard
 
-## 19. Why a clean minimum RTT is hard
+A client that arrives behind an existing queue may never observe the unloaded path. Its first successful request includes queueing delay, yet that request establishes the best baseline it knows. Relative to the inflated minimum, later congestion looks smaller than it really is.
 
-*Story:* A late client arriving behind an existing queue may record queued latency as its baseline. Natural worker variation makes propagation, service, and queue time difficult to separate. A minimum that never expires becomes stale; one that expires too eagerly can jump upward during persistent congestion.
+The opposite failure is possible too. A minimum RTT that never expires can become stale after routing changes, hardware replacement, or a permanent shift in service time. Expire it too eagerly, however, and persistent congestion can establish a new, higher “minimum” that teaches the controller to accept the queue.
 
-*Simulator:* Let clients join while a worker queue is occupied. Annotate which sample established each minimum and its age. Add a baseline-expiry control without immediately fixing the consequences.
+Natural variation makes the separation harder. RTT combines propagation, routing, scheduling, service, and waiting; the client cannot label those components from one sample. A clean baseline usually requires an interval in which the queue is deliberately drained, plus occasional exploration to discover that an endpoint’s condition has changed.
 
-*CTA:* Add a client during congestion, then drain the worker. Compare how long old and new clients take to discover the same unloaded latency.
+Delay is earlier feedback than loss, but it is not free information. The system must create opportunities to refresh the model on which that feedback depends.
 
-*Completion checks:* The late client first records a higher minimum RTT; after a clean sample, verify whether it converges to the older client’s baseline.
+### 20. The polite client can lose
 
-*Exit:* Refreshing the model requires deliberate periods of exploration or drain, not only passive smoothing.
+Delay-based control is not automatically fair. Imagine a fixed-rate client competing with a Vegas client for the same worker. As the queue grows, Vegas sees delay and yields. The fixed-rate client does not react, so it immediately fills the capacity Vegas released. Being more responsive has reduced the polite client’s share without fixing the queue.
 
-## 20. The polite client can lose
+Unequal shares can also persist between two adaptive clients. An established or higher-rate client may begin with a larger window. If both reduce their limits proportionally, the ratio between them can survive every backoff. Reversing arrival order can reverse the result.
 
-*Story:* Delay-based control is not automatically fair. An early or high-rate client can claim capacity first; proportional backoff may preserve that ratio. Against a fixed-rate or loss-based client, the delay-sensitive client can repeatedly yield while the aggressive client fills the space it releases.
+This is why endpoint details include completed rate per client and a Jain fairness score. For throughputs `x₁ … xₙ`, the score is:
 
-*Simulator:* Show completed rate and window per client–worker pair, not merely fleet totals. Allow the second client to use a different controller or demand rate while both compete for the same worker.
+```text
+fairness = (Σx)² / (n × Σx²)
+```
 
-*CTA:* Let one fixed-rate client settle, then add a Vegas client. Wait until aggregate metrics look stable and compare their shares. Reverse their arrival order and repeat.
+It is `1` when shares are equal and falls as they diverge. The score does not tell us which allocation is morally or operationally correct—some clients may deserve different weights—but it prevents a stable aggregate rate from masquerading as a fair outcome.
 
-*Completion checks:* In both orders, compare per-client completed rates; flag completion only after the fixed-rate client has more than its equal share or the fairness score exposes the imbalance.
+Low latency is a system outcome. Voluntary restraint is a client behaviour. They align only when participants react compatibly, or when a scheduler at the contested resource enforces the desired allocation.
 
-*Exit:* Low latency is a system outcome, while voluntary restraint is a client behaviour; the two align only when participants react compatibly.
+### 21. Probe, drain, and leave headroom
 
-## 21. Probe, drain, and leave headroom
+Fairness and model freshness both require convergence mechanisms. A controller that only reacts to its current observations can become trapped by them: routing away from an endpoint removes samples, an inflated minimum RTT hides a queue, and proportional backoff preserves unequal shares.
 
-*Story:* Fairness and model freshness need explicit convergence mechanisms. Borrow three shapes from BBRv3 without pretending request RPCs are TCP: randomise upward-probe timing so clients do not move in lockstep; occasionally reduce in-flight work so unloaded latency can be observed; and deliberately leave headroom so a smaller flow can discover capacity. Loss or ECN-like server feedback can act as a harder second signal.
+We can borrow three useful shapes from BBR-style control without pretending that independent RPCs are TCP packets:
 
-*Simulator:* Add controller phases—Cruise, Probe Up, Drain—and display them per endpoint. Upward probes are jittered across clients; baseline refresh uses an intentionally overlapping drain interval. Show the small throughput cost rather than hiding it.
+- **Probe up:** occasionally test whether more capacity is available. Jitter the timing so every client does not increase in lockstep.
+- **Drain:** occasionally reduce outstanding work long enough to seek an unloaded RTT sample.
+- **Cruise with headroom:** avoid occupying every last unit of estimated capacity, giving smaller or newly arrived flows room to gather evidence.
 
-*CTA:* Begin with unequal client shares, enable probe cycles, and compare convergence time, p99 latency, and unused headroom. Turn probes off again to see whether the imbalance freezes.
+Loss, explicit overload responses, or ECN-like server feedback can remain a harder second signal. They tell the controller to retreat even if its delay model is stale.
 
-*Completion checks:* Record fairness, p99, and utilisation before probing; complete when probe-on changes convergence and probe-off leaves the share distribution stable again.
+These phases have a real cost. Draining can briefly under-utilise a worker; probing can briefly increase latency. Hiding that cost would make the comparison meaningless. The objective is not perfect instantaneous utilisation but better convergence after the world changes.
 
-*Exit:* Probing improves convergence but does not provide strict fairness; only a scheduler at the contested resource can guarantee an allocation.
+Probing can improve fairness, but it cannot guarantee it. Strict allocation belongs in a scheduler at the resource where clients actually contend.
 
 *Reference:* [The BBRv3 specification](https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/) describes randomised ProbeBW timing, bandwidth headroom, and coordinated ProbeRTT episodes.
 
-## 22. Gradient2 follows the trend
+### 22. Gradient2 follows the trend
 
-*Story:* Gradient2 compares a responsive short-term RTT EWMA with a slower long-term EWMA for each worker. When the short estimate rises above the long estimate, queueing is probably worsening; when they converge, the controller can cautiously explore. The ratio reacts to direction rather than requiring a perfectly clean fixed minimum RTT.
+Vegas compares current RTT with a minimum. Gradient2 instead compares two exponentially weighted moving averages: a responsive short-term RTT and a slower long-term RTT. Their ratio describes direction. When the short estimate rises above the long estimate for several observations, latency is worsening; when they converge, the path is stable enough to explore cautiously.
 
-*Simulator:* Plot both EWMAs, their ratio, and the endpoint limit on one aligned timeline. Make warm-up, consecutive-trend requirements, cooldown, and backoff visible so an apparent oscillation can be explained rather than tuned away invisibly.
+The simulator’s controller does not react to one noisy sample. It warms both estimates, requires a sustained trend, and enters a cooldown after backing off. It also retains an estimate of queued work as a second delay signal so that a high-limit client continues correcting after both averages flatten at an elevated level. Rejection remains an immediate backoff signal.
 
-*CTA:* Select Gradient2, remove one worker, and identify the rising short-term line before the limit falls. Add the worker back and compare recovery speed with Vegas.
+Gradient2 reduces dependence on one permanently correct minimum RTT, but it introduces its own tuning choices: the two smoothing periods, divergence threshold, consecutive-trend count, cooldown, and increase and decrease gains. Exposing those stages is important because a controller that oscillates for unexplained reasons is not an improvement over a fixed magic number.
 
-*Completion checks:* The short RTT EWMA must exceed the long RTT EWMA before the local limit falls; after restoring capacity, measure time to a stable queue and compare it with Vegas.
+*Reference:* Netflix’s [`concurrency-limits`](https://github.com/Netflix/concurrency-limits) project describes the Vegas and Gradient2 algorithms that inspired this model.
 
-*Exit:* Gradient2 improves the delay signal, but its fractional target still needs a mechanism that decides exactly when requests leave.
+Whichever delay signal we choose, the controller produces a target that can be fractional. We still need a mechanism that decides exactly when discrete requests leave.
 
-## 23. Turn a fractional window into a smooth rate
+### 23. Turn a fractional window into a smooth rate
 
-*Story:* A target of `1.3` requests in flight is meaningful as an average even though an individual request is indivisible. For each client–worker pair, use `λ = L / W` to derive a pacing rate from the controller target and smoothed latency, then use a GCRA-style theoretical-arrival clock to spread admissions.
+Rounding a target of `1.3` down to one request wastes the additional capacity the controller discovered. Rounding it up to two may maintain exactly the queue it was trying to remove. Alternating between integer semaphore sizes also tends to release work in bursts.
 
-*Simulator:* Contrast an integer semaphore that alternates in bursts with a paced fractional target. Display the theoretical next-arrival time and preserve the controller’s local state when a request is routed elsewhere.
+Little’s Law gives us a smoother implementation. For each client–worker pair, derive an admission rate from the target `L` and smoothed RTT `W`:
 
-*CTA:* Set the same average target under burst and paced modes. Compare queue peaks and completion rate over a long enough window that both send the same amount of work.
+```text
+λ = L / W
+```
 
-*Completion checks:* The two modes must offer comparable total work; paced mode should have a lower peak queue without losing meaningful completed throughput.
+A GCRA-style theoretical-arrival clock then spaces requests at that average rate. A target of `1.3` becomes a sequence of individual admissions over time rather than an impossible fractional request. The concurrency target remains the safety model; pacing is how we realise it without a microburst.
 
-*Exit:* The controller chooses a safe amount of outstanding work; pacing prevents that amount from arriving as a microburst.
+The pacing state must belong to the endpoint just like the RTT estimates and limit. If Power of Two sends a request elsewhere, that should not reset this endpoint’s clock. If neither sampled endpoint is eligible, the request waits in the bounded client-side admission queue instead of bypassing control.
+
+Pacing does not create capacity, and short measurement windows can make it appear slower than a burst. Over a sufficiently long interval, paced and bursty implementations of the same average target should offer comparable work. The useful difference is lower queue peaks, not a magically higher rate.
 
 ## Act five: make the end state survive reality
 
-## 24. Routing and admission must cooperate
+### 24. Routing and admission must cooperate
 
-*Story:* Power of Two asks where a request should go; the endpoint controller asks whether it should go now. The first-choice endpoint may be healthy but temporarily out of admission budget. The client must not blindly queue behind it while another sampled worker has headroom, nor repeatedly resample until it defeats every limit.
+Power of Two asks **where** a request should go. The endpoint controller asks **whether it should go now**. Those decisions share state, but they are not interchangeable.
 
-*Simulator:* Make the decision tree visible: sample two, score them, try the lower score, try the second if eligible, otherwise wait in a bounded client-side pending queue. Count selection attempts so retrying placement cannot become hidden load.
+After sampling two workers, the client scores both and tries the better candidate first. If that endpoint has no admission budget, the second sampled endpoint may still accept the request. If neither is eligible, the request waits in a bounded client-side queue until one of those choices gains capacity.
 
-*CTA:* Exhaust one candidate’s limit and watch the request choose the other. Exhaust both and verify that no server queue grows until an admission slot opens.
+The word “sampled” is a safety property. Repeatedly drawing new pairs until some worker accepts the request would turn a two-choice algorithm into an unbounded scan and quietly defeat every local limit. A blocked request therefore retains its candidates instead of resampling its way around congestion control.
 
-*Completion checks:* With one eligible candidate, traffic must choose it; with neither eligible, total server queue depth must remain flat and the pending choice must not be resampled.
+Client-side waiting must remain bounded and deadline-aware. A request that cannot be admitted in time should fail before consuming downstream resources. Retries return to the same decision path; they do not receive a secret route around the controller.
 
-*Exit:* The complete client is now a load balancer plus a collection of endpoint-specific feedback loops, not one service-wide magic number.
+The complete client is now a load balancer plus a collection of endpoint-specific feedback loops, not one service-wide magic number.
 
-## 25. Stale endpoints need exploration
+### 25. Stale endpoints need exploration
 
-*Story:* Routing away from a slow worker reduces its samples. Its EWMA can remain pessimistic after recovery, causing starvation. Random candidate selection provides opportunities to reconsider it, but a worker that always loses still needs an explicit, bounded probe policy.
+Good routing creates an information problem. When a worker becomes slow, its score rises and Power of Two sends it less work. Fewer requests mean fewer RTT samples. If the worker later recovers, its stale estimate can keep it looking bad, so the decision that protected us during failure can starve healthy capacity indefinitely.
 
-*Simulator:* Mark endpoint estimates as fresh, ageing, or stale. Give new and stale workers occasional probe eligibility, with jitter across clients and a cooldown after failure. Do not initialize a cold worker as either infinitely good or permanently bad.
+Random candidate selection gives every endpoint some chance of being reconsidered, but a worker that repeatedly loses the comparison still needs bounded probe eligibility. New and stale endpoints should occasionally receive a request even when their estimates are incomplete or pessimistic. Probe times should be jittered across clients and followed by a cooldown after failure so that discovery does not become a coordinated burst.
 
-*CTA:* Slow a worker until traffic moves away, then restore it. Compare recovery with passive Power of Two and with stale-endpoint probes enabled.
+Cold endpoints should be neither infinitely attractive nor permanently bad. Treating them as perfect sends an arrival burst to every new replica; treating them as unusable means they never warm. A small explicit probe budget states the trade-off honestly.
 
-*Completion checks:* Passive routing must leave the restored worker under-sampled or underused; bounded probes must create fresh samples and recover a measurable share without a queue spike.
+Exploration spends a little known-good capacity to learn whether the world changed. Without it, an adaptive system can be excellent at remembering failures and terrible at noticing recovery.
 
-*Exit:* Exploration trades a small amount of known-good capacity for the information needed to notice that the world changed.
+### 26. Scaling without magical coordination
 
-## 26. Scaling without magical coordination
+With `C` clients and `W` workers, the system contains `C × W` independently evolving endpoint controllers. Adding a client creates `W` cold states. Adding a worker creates one cold state in each of the `C` clients. Existing pairs retain their histories; nothing recomputes an equal global share.
 
-*Story:* Adding a client creates cold state for every discovered worker; existing clients retain their histories. Adding a worker creates one cold endpoint controller in every client. Removing either side drains or cancels only the affected work. Nothing recomputes an equal global share.
+This is more state than one service-wide limiter, but it is state about the thing we need to control. A slow worker should reduce only the windows targeting it. A client with an unusual network path should not overwrite every other client’s latency estimate.
 
-*Simulator:* Permit client and worker changes while jobs are moving. Freeze removed entities visually until their outstanding work resolves, and expose the `clients × workers` growth in controller state.
+Removal is similarly local. Deleting a client cancels its outstanding work without fabricating server rejections. Deleting a worker cancels or drains only jobs assigned to that destination, while surviving endpoint histories remain intact. Discovery events should not reset the whole feedback system merely because resetting produces a tidy graph.
 
-*CTA:* Add two workers and then three clients in quick succession. Follow which pairs warm first, which probes collide, and whether older clients temporarily retain more throughput.
+These transients are algorithm behaviour, not animation noise. In an autoscaled deployment the system may spend much of its life warming new pairs, draining old ones, and adapting to a moving topology. A controller that looks wonderful only after 150 quiet seconds has not solved the production problem.
 
-*Completion checks:* New client–worker pairs begin cold; existing pairs retain state; record the transient fairness score and any cancelled work when the fleet changes.
+### 27. Read the whole system, not one metric
 
-*Exit:* The transients are part of the algorithm’s behaviour, not animation noise; autoscaling means the system may spend much of its life outside steady state.
+A controller can reduce latency by underfeeding workers. It can raise utilisation by maintaining a queue. It can improve aggregate throughput while starving one client, or balance workers while moving all the waiting into clients. Every one of those changes can make a chosen dashboard number look better.
 
-## 27. Read the whole system, not one metric
+Evaluate the whole loop with the vocabulary from the beginning:
 
-*Story:* A controller can reduce latency by underfeeding workers, raise utilisation by maintaining a queue, improve aggregate throughput while starving one client, or balance workers while increasing client-side waiting. RED and USE must be available globally and broken down by client and worker.
+- **RED:** offered and completed rate, rejection, and p50/p99 duration;
+- **USE:** worker utilisation, queue saturation, and worker failures;
+- **fairness:** completed shares by client and worker;
+- **recovery:** the transient after clients, workers, or service time change.
 
-*Simulator:* Finish with a comparison view: throughput, p50/p99 latency, rejection, worker utilisation, queue saturation, client-side waiting, and per-client share. Keep the topology and Power-of-Two policy fixed while switching admission controllers.
+Breakdowns matter as much as totals. Aggregate utilisation can hide one hot worker beside one idle worker. Aggregate throughput can hide a client receiving almost nothing. A low server queue can hide a large client-side queue. The location of waiting is part of the result.
 
-*CTA:* Choose a controller and perturb both sides of the fleet. Explain the result using one RED signal, one USE signal, and one fairness measurement before revealing the simulator’s summary.
+This is also why the deterministic tests behind these simulations record checkpoints rather than asserting one final number. They cover transient and steady-state statistics by client, worker, and client–worker pair. The scenarios verify the claims made here: fixed rate remains overloaded after scale-out, fixed concurrency lowers admissions when work slows, Vegas can reduce loss and latency relative to loss-based control, delay-sensitive clients can lose to aggressive ones, and paced fractional targets avoid integer bursts.
 
-*Completion checks:* Identify one rate/error/duration signal, one utilisation/saturation/error signal, and a per-client fairness value; no single green health label is sufficient.
+There is no single best controller independent of whether the objective is latency, utilisation, stability, fairness, or recovery speed.
 
-*Exit:* There is no single “best” controller independent of whether the objective is latency, utilisation, stability, fairness, or recovery speed.
+### 28. The final lesson
 
-## 28. The final lesson
+Rate limits, concurrency limits, Power of Two, Vegas, Gradient2, Little’s Law, GCRA, and probing are not competing magic numbers. They occupy different places in one feedback system:
 
-*Story:* Rate limits, concurrency limits, Power of Two, Vegas, Gradient2, Little’s Law, GCRA, and probing are not competing magic numbers. They occupy different places in a feedback system: discover endpoints, choose a destination, estimate its state, decide whether more work is safe, and pace that work into the system.
+1. endpoint discovery determines the possible destinations;
+2. Power of Two chooses two candidates without scanning the fleet;
+3. per-endpoint measurements estimate the state of each path;
+4. a controller decides how much unfinished work is safe;
+5. a pacing clock turns that target into smooth admissions; and
+6. small bounded queues absorb short mismatches and reject work before waiting becomes unbounded.
 
-*Final visual:* Collapse the simulator into the finished client pipeline: endpoint discovery feeds the Power-of-Two chooser; each endpoint owns measurements and a controller; eligible work passes through its pacing clock; every worker owns a small bounded queue. Animate one final request through the decisions as the labels recap the article.
+The design does not make overload impossible. Demand can jump faster than any sampled controller reacts, all workers can fail together, and deadlines can be shorter than the available service capacity permits. The goal is a feedback loop that notices change, limits the damage, and recovers without requiring a centralised coordinator to know every client and worker.
 
-*CTA:* Switch between the fixed-rate baseline and the complete adaptive client under one final scale-and-slowdown scenario. The goal is not to make failure impossible, but to see the feedback loop recover without centralized coordination.
+Fixed rate remains a good answer when its assumptions are stable. Fixed concurrency is a remarkably effective next step because duration feeds back into admissions automatically. Delay controllers move the signal earlier, but pay for that advantage with baseline, fairness, exploration, and tuning problems. Pacing preserves fractional decisions, while bounded queues and loss remain essential safety signals rather than evidence that the rest of the design failed.
 
-*Completion checks:* Fixed rate must retain queueing or rejection after the perturbation; the adaptive path must reduce admission, drain the queue, and regain a stable completion rate after recovery.
+The durable question is not “which limiter should I copy?” It is:
 
-The finished article should leave the reader with one durable question: when the system changes, which observation causes this limit to change with it?
+> When the system changes, which observation causes this limit to change with it?
+
+If the answer is “a human edits configuration,” the limit is fixed even if the implementation is sophisticated. If the answer is a local measurement, ask how it becomes stale, how competing clients respond, and what happens during the transient. That is the difference between a number that worked yesterday and a congestion-control system.

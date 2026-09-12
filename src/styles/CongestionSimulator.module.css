@@ -187,7 +187,7 @@
 	white-space: nowrap;
 }
 
-.Healthy, .Warning {
+.PlaybackStatus, .Running {
 	position: relative;
 	padding-left: 0.75rem;
 	font-size: 0.75rem;
@@ -195,7 +195,7 @@
 	white-space: nowrap;
 }
 
-.Healthy::before, .Warning::before {
+.PlaybackStatus::before, .Running::before {
 	position: absolute;
 	top: 50%;
 	left: 0;
@@ -206,10 +206,10 @@
 	transform: translateY(-50%);
 }
 
-.Healthy { color: var(--sim-success); }
-.Healthy::before { background: var(--sim-success); }
-.Warning { color: var(--sim-accent); }
-.Warning::before { background: var(--sim-accent); }
+.PlaybackStatus { color: var(--sim-muted); }
+.PlaybackStatus::before { background: var(--sim-border); }
+.Running { color: var(--color-fg); }
+.Running::before { background: var(--sim-accent); }
 
 .SceneCanvas {
 	display: block;

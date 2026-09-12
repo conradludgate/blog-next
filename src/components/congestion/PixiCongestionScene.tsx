@@ -209,7 +209,7 @@ export default function PixiCongestionScene({ state, running, playbackSpeed }: {
 		const redraw = () => sceneRef.current?.update(stateRef.current);
 		const start = async () => {
 			const app = new Application();
-			await app.init({ width: host.clientWidth, height: host.clientHeight, backgroundAlpha: 0, antialias: true, autoDensity: true, resolution: window.devicePixelRatio || 1, autoStart: false });
+			await app.init({ width: host.clientWidth, height: host.clientHeight, backgroundAlpha: 0, antialias: true, autoDensity: true, resolution: Math.min(window.devicePixelRatio || 1, 2), autoStart: false });
 			if (cancelled) { app.destroy(); return; }
 			app.canvas.className = styles.SceneCanvas;
 			app.canvas.setAttribute("aria-hidden", "true");

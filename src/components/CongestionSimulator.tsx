@@ -64,7 +64,7 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 	const conditionsComplete = challenge.conditions.every((condition) =>
 		(conditionProgress[condition.id]?.completedAtMs ?? null) !== null);
 	const isRejecting = (metrics.rejectionRate ?? 0) > 0.005;
-	const status = state.nowMs === 0 ? "Ready" : isRejecting ? "Rejecting" : state.queueDepth > 0 ? `${state.queueDepth} queued` : "Healthy";
+	const status = state.nowMs === 0 ? "Ready" : isRunning ? "Running" : "Paused";
 
 	function commitState(next: SimulationState) {
 		stateRef.current = next;
@@ -82,6 +82,14 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 		}, TICK_MS / playbackSpeed);
 		return () => window.clearInterval(timer);
 	}, [isRunning, playbackSpeed, challenge]);
+
+	useEffect(() => {
+		const pauseWhenHidden = () => {
+			if (document.hidden) setIsRunning(false);
+		};
+		document.addEventListener("visibilitychange", pauseWhenHidden);
+		return () => document.removeEventListener("visibilitychange", pauseWhenHidden);
+	}, []);
 
 	function reset() {
 		const next = createChallenge(challengeId);
@@ -132,7 +140,7 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 						</div>
 						<div className={styles.RunState}>
 							<span className={styles.Clock}>{formatMetricValue(state.nowMs / 1000)}s</span>
-							<span className={state.queueDepth > 0 || isRejecting ? styles.Warning : styles.Healthy}>{status}</span>
+							<span className={isRunning ? styles.Running : styles.PlaybackStatus}>{status}</span>
 						</div>
 					</div>
 

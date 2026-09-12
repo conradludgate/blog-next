@@ -144,15 +144,29 @@ class PixiScene {
 		}
 		this.app.render();
 	}
+	setRunning(running: boolean) {
+		if (running) {
+			this.app.start();
+			return;
+		}
+		this.app.ticker.stop();
+		for (const view of this.jobs.values()) {
+			view.progress = 1;
+			view.container.position.copyFrom(view.to);
+		}
+		this.app.render();
+	}
 	resize(width: number, height: number) { this.app.renderer.resize(width, height); this.update(this.state); }
 	destroy() { this.app.ticker.stop(); this.app.destroy({ removeView: true }, { children: true }); }
 }
 
-export default function PixiCongestionScene({ state }: { state: SimulationState }) {
+export default function PixiCongestionScene({ state, running }: { state: SimulationState; running: boolean }) {
 	const hostRef = useRef<HTMLDivElement>(null);
 	const stateRef = useRef(state);
+	const runningRef = useRef(running);
 	const sceneRef = useRef<PixiScene | undefined>(undefined);
 	useEffect(() => { stateRef.current = state; }, [state]);
+	useEffect(() => { runningRef.current = running; sceneRef.current?.setRunning(running); }, [running]);
 	useEffect(() => {
 		const host = hostRef.current;
 		if (!host) return;
@@ -169,7 +183,7 @@ export default function PixiCongestionScene({ state }: { state: SimulationState 
 			sceneRef.current = scene;
 			scene.update(stateRef.current);
 			app.ticker.add((ticker) => scene.tick(ticker.deltaMS));
-			app.start();
+			scene.setRunning(runningRef.current);
 			observer = new ResizeObserver(() => scene.resize(host.clientWidth, host.clientHeight));
 			observer.observe(host);
 		};

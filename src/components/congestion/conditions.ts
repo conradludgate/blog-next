@@ -26,11 +26,10 @@ export function updateConditionProgress(
 	progress: Record<string, ConditionProgress>,
 	state: SimulationState,
 	baseline: SimulationState,
-	active: boolean,
 ): Record<string, ConditionProgress> {
 	return Object.fromEntries(conditions.map((condition) => {
 		const current = progress[condition.id] ?? { activeSinceMs: null, completedAtMs: null };
-		if (current.completedAtMs !== null || !active || !condition.when(state, baseline)) {
+		if (current.completedAtMs !== null || !condition.when(state, baseline)) {
 			return [condition.id, current.completedAtMs !== null ? current : { ...current, activeSinceMs: null }];
 		}
 		const activeSinceMs = current.activeSinceMs ?? state.nowMs;

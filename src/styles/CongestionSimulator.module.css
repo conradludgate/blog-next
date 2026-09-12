@@ -26,7 +26,7 @@
 	text-transform: uppercase;
 }
 
-.Header h2 {
+.Header h2, .Header h3 {
 	margin: 0.15rem 0 0;
 	font-size: clamp(1.35rem, 3vw, 1.75rem);
 	line-height: 1.2;
@@ -237,7 +237,7 @@
 .LessonActions button:focus-visible, .ProcessingTime:focus-visible { outline: 3px solid var(--sim-accent); outline-offset: 2px; }
 .Lesson small { color: var(--sim-muted); }
 .Observation { font-size: 0.875rem; }
-.Conditions { display: grid; gap: 0.45rem; padding: 0; margin: 0 0 0.75rem; list-style: none; }
+.Conditions { display: grid; gap: 0.45rem; padding: 0; margin: 0.75rem 0; list-style: none; }
 .Conditions li { display: flex; align-items: flex-start; gap: 0.55rem; padding: 0.5rem 0.6rem; border: 1px solid var(--sim-border); border-radius: 0.35rem; background: var(--color-bg); }
 .Conditions li > span { width: 1.15rem; color: var(--sim-muted); font-weight: 800; line-height: 1.35; }
 .Conditions strong, .Conditions small { display: block; }

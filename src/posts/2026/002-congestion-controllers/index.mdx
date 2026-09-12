@@ -56,13 +56,11 @@ Start with one client and four workers. Every coloured dot is a request, and eve
 
 First we limit how often requests can start. Each client may send at most half a request per second to each worker. This is a local budget: adding another client adds another set of budgets. No existing client is told to give up part of its allowance.
 
-Use the guided experiments below to change one thing at a time. Watch **completed throughput** as well as offered load. More arrivals do not necessarily mean more useful work. The queue shows waiting directly, while the duration measurement includes the time successful requests spend getting to the worker, waiting, and being processed.
+Each section introduces a fresh copy of the same simulator, already configured for the idea beside it. The controls do not perform a scripted demonstration: the experiment describes an outcome, and you must decide which ordinary client, worker, processing-time, or controller control will produce it. The checks turn green only after the simulator observes the result.
 
-The second and third experiments begin from the same healthy one-client topology and apply the same processing-time increase to rate and concurrency limits. A rate budget does not shrink when work becomes slower. A concurrency permit, however, stays occupied until the request finishes, so the rate of new admissions falls naturally. Compare their response to the slowdown rather than treating the absolute numbers as a controller benchmark.
+Watch **completed throughput** as well as offered load. More arrivals do not necessarily mean more useful work. The queue shows waiting directly, while duration includes the time successful requests spend getting to the worker, waiting, and being processed.
 
-That still leaves a choice: how much unfinished work should each client allow? A fixed permit count cannot know how many other clients are competing for the same worker. The final experiment introduces Vegas, which uses latency observations to adjust that target. Its estimates are local, so the result depends on when clients arrive and what they observe.
-
-<CongestionSimulator />
+The rate and concurrency experiments later in the article begin from the same healthy one-client topology and apply the same processing-time increase. A rate budget does not shrink when work becomes slower. A concurrency permit stays occupied until the request finishes, so the rate of new admissions falls naturally. Compare their responses rather than treating the absolute numbers as a controller benchmark.
 
 Concurrency connects rate and duration: in steady state, average work in flight equals completed throughput multiplied by average latency. A fixed concurrency limit therefore reduces the sending rate as latency rises. An adaptive controller goes further by changing the target itself; pacing turns that potentially fractional target into spaced-out requests.
 
@@ -168,6 +166,8 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *CTA:* Add clients one at a time. Predict the total rate before each click, then keep going until worker queues or rejections appear.
 
+<CongestionSimulator challenge="fixed-rate-client-scale" />
+
 *Completion checks:* Total offered rate grows with every added client; complete the step only after queueing or rejection persists for five seconds.
 
 *Exit:* A fixed per-client limit encodes an assumption about client count that autoscaling is free to invalidate.
@@ -188,11 +188,13 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *Story:* Capacity changes even when replica counts do not. Cache misses, noisy neighbours, garbage collection, heterogeneous hardware, and request cost all change service time. An arrival rate that was safe a moment ago can start building queues without any configuration event.
 
-*Simulator:* Let each worker drift independently around its baseline performance. Make the drift slow enough to observe but do not provide a cartoon “break server” button; the reader should learn to infer degradation from RED and USE.
+*Simulator:* Begin below capacity, then let the reader change processing time without changing the rate or topology. A later experiment will make individual workers drift independently and ask the reader to identify the slow one from RED and USE.
 
-*CTA:* Keep rate and topology fixed. Identify the slow worker from its local queue and latency before revealing its hidden service-time multiplier.
+*CTA:* Keep the controller, client count, and worker count fixed. Increase processing time and wait for the unchanged rate to create a persistent queue and then rejection.
 
-*Completion checks:* Identify the slow worker from its queue depth and RTT alone; confirm that its completion rate is lower or its saturation higher than peers.
+<CongestionSimulator challenge="fixed-rate-slowdown" />
+
+*Completion checks:* Processing time changes while the rate does not; waiting persists for five seconds; rejection follows.
 
 *Exit:* Rate controls arrivals, but it does not directly bound the amount of unfinished work created by slower responses.
 
@@ -214,9 +216,11 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *Simulator:* Retain Power of Two and replace the per-worker rate clock with a fixed in-flight window. Show permits attached to endpoint state and returned only on completion or rejection.
 
-*CTA:* Give one worker a long service-time spike. Compare fixed rate and fixed concurrency with the same nominal throughput, watching that worker’s queue and the client’s send rate.
+*CTA:* Repeat the previous all-worker slowdown with fixed concurrency. Keep the one-client topology and watch offered rate, queue depth, and rejection.
 
-*Completion checks:* Fixed rate must retain queueing or rejection after the spike; fixed concurrency must reduce admissions and avoid sustained rejection.
+<CongestionSimulator challenge="concurrency-slowdown" />
+
+*Completion checks:* Offered rate falls below one request per second; the server queue remains empty and rejection stays at zero for five seconds.
 
 *Exit:* Concurrency reacts automatically to duration, but someone still has to choose the window size.
 
@@ -276,7 +280,9 @@ The remaining sections are development briefs for expanding these experiments, r
 
 *Simulator:* Pin two client–worker inspectors side by side. Preserve existing controller state when clients or workers elsewhere change; never silently redistribute windows to make the graph look fair.
 
-*CTA:* Start two clients at different times and compare their baselines and limits for the same worker after total throughput has stabilised.
+*CTA:* Add two clients one at a time and compare the new endpoint histories with the established clients after total throughput has stabilised.
+
+<CongestionSimulator challenge="vegas-client-scale" />
 
 *Completion checks:* Show distinct minimum RTTs or limits for the same worker; report each client’s completed-rate share and the Jain fairness score.
 

@@ -122,12 +122,13 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 					<div className={styles.PlaybackRow}>
 						<div className={styles.Playback} role="group" aria-label="Simulation playback">
 							<button type="button" className={styles.Play} aria-pressed={isRunning} onClick={() => setIsRunning((running) => !running)}>
+								<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">{isRunning ? <path d="M3 2h3v12H3zm7 0h3v12h-3z" /> : <path d="M4 2l10 6-10 6z" />}</svg>
 								{isRunning ? "Pause" : "Run"}
 							</button>
 							<button type="button" aria-label="Slow playback to half speed" className={playbackSpeed === 0.5 ? styles.Selected : ""} aria-pressed={playbackSpeed === 0.5} onClick={() => setPlaybackSpeed((speed) => speed === 1 ? 0.5 : 1)}>
 								½ speed
 							</button>
-							<button type="button" onClick={reset}>Reset</button>
+							<button type="button" onClick={reset}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M2 7a6 6 0 1 1 1.5 5M2 2v5h5" /></svg>Reset</button>
 						</div>
 						<div className={styles.RunState}>
 							<span className={styles.Clock}>{formatMetricValue(state.nowMs / 1000)}s</span>
@@ -189,7 +190,7 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 			</div>
 
 			<details className={styles.EndpointDetails}>
-				<summary>Details</summary>
+				<summary>Endpoint details</summary>
 				<div className={styles.EndpointTable}>
 					<p>Capacity <strong>{formatMetricValue(metrics.capacity)}/s</strong> · Client fairness <strong>{breakdown.clientThroughputFairness === null ? "—" : formatMetricValue(breakdown.clientThroughputFairness)}</strong> · Worker fairness <strong>{breakdown.workerThroughputFairness === null ? "—" : formatMetricValue(breakdown.workerThroughputFairness)}</strong></p>
 					<table>

@@ -8,7 +8,7 @@ import type { Job, SimulationState } from "./simulation";
 
 interface Point { x: number; y: number }
 interface JobView { container: Container; from: Point; to: Point; progress: number }
-const COLOURS = ["#b44b31", "#2563eb", "#16806a", "#9333b8", "#a16207", "#be185d", "#087e9c", "#6663c6"];
+const COLOURS = ["#c5684b", "#5486d9", "#3fa28d", "#a676c6", "#bb943f", "#cc6998", "#489cb5", "#8280ce"];
 
 function label(text: string, x: number, y: number, ink: string, size = 12): Text {
 	const node = new Text({ text, style: { fontFamily: "system-ui, sans-serif", fontSize: size, fill: ink } });
@@ -74,6 +74,7 @@ class PixiScene {
 			view.to = target;
 			view.progress = 0;
 		}
+		if (!this.app.ticker.started) this.setRunning(false);
 	}
 	private departure(client: number): Point {
 		const point = this.clients[client];
@@ -105,9 +106,29 @@ class PixiScene {
 		const computed = getComputedStyle(this.app.canvas);
 		const ink = computed.color;
 		const bg = computed.backgroundColor;
-		this.nodes.addChild(label("CLIENTS · POWER OF TWO", 20, 10, ink, 11));
-		this.nodes.addChild(label("WORKER QUEUES", this.mobile ? 20 : this.app.screen.width - 282,
-			this.mobile ? Math.ceil(this.clients.length / 2) * 70 + 25 : 10, ink, 11));
+		const success = computed.getPropertyValue("--sim-success").trim();
+		const muted = ink;
+		const grid = new Graphics();
+		for (let x = 16; x < this.app.screen.width; x += 24) {
+			for (let y = 16; y < this.app.screen.height; y += 24) grid.circle(x, y, 0.7);
+		}
+		grid.fill({ color: ink, alpha: 0.09 });
+		this.nodes.addChild(grid);
+		this.nodes.addChild(label("CLIENTS", 20, 16, muted, 10));
+		this.nodes.addChild(label("FIFO QUEUES  /  WORKERS", this.mobile ? 20 : this.app.screen.width - 282,
+			this.mobile ? Math.ceil(this.clients.length / 2) * 70 + 25 : 16, muted, 10));
+		if (!this.mobile) {
+			const networkLabel = label("NETWORK / LOAD BALANCER", (this.app.screen.width - 158) / 2, 16, muted, 10);
+			networkLabel.anchor.x = 0.5;
+			this.nodes.addChild(networkLabel);
+		}
+		const guides = new Graphics();
+		this.clients.forEach((_, client) => this.workers.forEach((_, worker) => {
+			const start = this.departure(client), end = this.arrival(worker);
+			guides.moveTo(start.x, start.y).lineTo(end.x, end.y);
+		}));
+		guides.stroke({ color: ink, alpha: 0.06, width: 1 });
+		this.nodes.addChild(guides);
 		const routes = new Set<string>();
 		for (const job of this.state.jobs) {
 			const key = `${job.client}:${job.service}`;
@@ -118,24 +139,31 @@ class PixiScene {
 		}
 		this.clients.forEach((point, i) => {
 			const busy = this.state.jobs.filter((job) => job.client === i).length;
-			this.nodes.addChild(new Graphics().roundRect(point.x - 52, point.y - 25, 104, 50, 7).fill(bg).stroke({ color: COLOURS[i % COLOURS.length], width: 2 }));
-			this.nodes.addChild(label(`Client ${i + 1}`, point.x - 42, point.y - 20, ink, 13));
-			this.nodes.addChild(label(`${busy} in flight`, point.x - 42, point.y, ink));
+			this.nodes.addChild(new Graphics().roundRect(point.x - 52, point.y - 22, 104, 50, 9).fill({ color: ink, alpha: 0.06 }));
+			this.nodes.addChild(new Graphics().roundRect(point.x - 52, point.y - 25, 104, 50, 9).fill(bg).stroke({ color: COLOURS[i % COLOURS.length], alpha: 0.65, width: 1.2 }));
+			this.nodes.addChild(new Graphics().circle(point.x + 39, point.y - 12, 3).fill(COLOURS[i % COLOURS.length]));
+			this.nodes.addChild(label(`Client ${i + 1}`, point.x - 42, point.y - 17, ink, 12));
+			this.nodes.addChild(label(`${busy} in flight`, point.x - 42, point.y + 2, muted, 11));
 		});
 		this.workers.forEach((point, i) => {
 			const queue = this.queues[i];
 			const waiting = this.state.jobs.filter((job) => job.service === i && job.stage === "queue").length;
 			const busy = this.state.jobs.some((job) => job.service === i && (job.stage === "service" || job.stage === "serviceDispatch"));
 			this.nodes.addChild(new Graphics().moveTo(queue.x, queue.y).lineTo(point.x, point.y).stroke({ color: ink, alpha: 0.35, width: 1 }));
-			this.nodes.addChild(new Graphics().roundRect(queue.x - 52, queue.y - 18, 104, 36, 5).fill(bg).stroke({ color: ink, width: 1 }));
+			this.nodes.addChild(new Graphics().roundRect(queue.x - 52, queue.y - 18, 104, 36, 5).fill(bg).stroke({ color: ink, alpha: 0.25, width: 1 }));
 			this.nodes.addChild(label(`Queue ${waiting}/${WORKER_QUEUE_LIMIT}`, queue.x - 42, queue.y - 16, ink, 11));
 			for (let slot = 0; slot < WORKER_QUEUE_LIMIT; slot++) {
 				const position = this.queueSlot(i, slot);
 				this.nodes.addChild(new Graphics().rect(position.x - 5, position.y - 5, 10, 10).fill({ color: ink, alpha: slot < waiting ? 0.35 : 0.08 }));
 			}
-			this.nodes.addChild(new Graphics().roundRect(point.x - 52, point.y - 25, 104, 50, 7).fill(bg).stroke({ color: ink, width: 2 }));
-			this.nodes.addChild(label(`Worker ${i + 1}`, point.x - 42, point.y - 20, ink, 13));
-			this.nodes.addChild(label(busy ? "busy" : "ready", point.x - 42, point.y, ink));
+			this.nodes.addChild(new Graphics().roundRect(point.x - 52, point.y - 22, 104, 50, 9).fill({ color: ink, alpha: 0.06 }));
+			this.nodes.addChild(new Graphics().roundRect(point.x - 52, point.y - 25, 104, 50, 9).fill(bg).stroke({ color: busy ? success : ink, alpha: busy ? 0.7 : 0.25, width: 1.2 }));
+			const activeJob = this.state.jobs.find((job) => job.service === i && job.stage === "service");
+			const progress = activeJob ? Math.max(0, Math.min(1, 1 - activeJob.remainingMs / this.state.serviceMs)) : 0;
+			this.nodes.addChild(new Graphics().roundRect(point.x - 42, point.y + 19, 84, 2, 1).fill({ color: ink, alpha: 0.08 }));
+			if (progress > 0) this.nodes.addChild(new Graphics().roundRect(point.x - 42, point.y + 19, 84 * progress, 2, 1).fill(success));
+			this.nodes.addChild(label(`Worker ${i + 1}`, point.x - 42, point.y - 17, ink, 12));
+			this.nodes.addChild(label(busy ? "busy" : "ready", point.x - 42, point.y + 2, muted, 11));
 		});
 	}
 	tick(delta: number) {
@@ -176,6 +204,9 @@ export default function PixiCongestionScene({ state, running, playbackSpeed }: {
 		if (!host) return;
 		let cancelled = false;
 		let observer: ResizeObserver | undefined;
+		let themeObserver: MutationObserver | undefined;
+		const themeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+		const redraw = () => sceneRef.current?.update(stateRef.current);
 		const start = async () => {
 			const app = new Application();
 			await app.init({ width: host.clientWidth, height: host.clientHeight, backgroundAlpha: 0, antialias: true, autoDensity: true, resolution: window.devicePixelRatio || 1, autoStart: false });
@@ -191,9 +222,12 @@ export default function PixiCongestionScene({ state, running, playbackSpeed }: {
 			scene.setRunning(runningRef.current);
 			observer = new ResizeObserver(() => scene.resize(host.clientWidth, host.clientHeight));
 			observer.observe(host);
+			themeObserver = new MutationObserver(redraw);
+			themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+			themeQuery.addEventListener("change", redraw);
 		};
 		void start();
-		return () => { cancelled = true; observer?.disconnect(); sceneRef.current?.destroy(); sceneRef.current = undefined; };
+		return () => { cancelled = true; observer?.disconnect(); themeObserver?.disconnect(); themeQuery.removeEventListener("change", redraw); sceneRef.current?.destroy(); sceneRef.current = undefined; };
 	}, []);
 	useEffect(() => { sceneRef.current?.update(state); }, [state]);
 	return <div ref={hostRef} className={styles.SceneCanvas} style={{

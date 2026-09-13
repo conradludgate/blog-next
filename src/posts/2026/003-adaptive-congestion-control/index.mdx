@@ -19,9 +19,9 @@ export const meta = {
 
 Fixed concurrency already responds to slower connection establishment by reducing admissions, but someone still has to choose the window. A static number was clearly not going to survive that topology, so our first adaptive controller was AIMD. Rejections and timeouts were obvious congestion signals: increase cautiously while attempts succeed, then cut the limit when they fail.
 
-That worked until we found a queue we had not been measuring. The Linux kernel’s TCP accept queue on a Postgres VM could fill before the proxy received a clean failure signal. New attempts instead manifested as rising connection latency and eventually timeouts. AIMD was reacting, but only after the endpoint was already in trouble. We pivoted to Gradient2 so that the trend in connection latency could become an earlier signal.
+We found that the Linux kernel’s TCP accept queue was filling, with high connection latencies and timeouts. Waiting for those timeouts meant reacting after substantial waiting had already accumulated. We pivoted to Gradient2 to use rising connection latency as an earlier signal.
 
-This article reconstructs that progression rather than jumping straight to the final algorithm. We will begin with rejection, move through delay-based control, preserve fractional targets through pacing, and then deal with the awkward parts that appear in production: unequal proxy replicas, stale measurements, exploration, and a topology that keeps changing.
+The production path was AIMD to Gradient2. Vegas provides a useful explanation of delay-based control along the way. Pacing, fairness, and exploration then raise broader design questions; the discussion is not a claim that every mechanism described here was deployed in our proxy.
 
 The goal is not one perfect controller. It is a client pipeline in which every mechanism has one job: routing chooses where work should go, feedback estimates how much is safe, pacing decides when it leaves, and bounded queues contain mistakes.
 
@@ -29,7 +29,9 @@ The goal is not one perfect controller. It is a client pipeline in which every m
 
 ### 1. AIMD learns from loss
 
-Additive Increase, Multiplicative Decrease—AIMD—was our first controller because it turns the fixed window into a feedback loop with very little machinery. Each successful downstream connection allows the responsible proxy–Postgres controller to increase cautiously. A failure or timeout cuts that endpoint’s target by a proportion, making the retreat much faster than the probe.
+Additive Increase, Multiplicative Decrease—AIMD—turns a fixed window into a feedback loop: increase by a small amount while work succeeds, then reduce the target by a proportion on congestion. The retreat is faster than the probe.
+
+Our simulator uses successful attempts for increase and queue rejection for backoff. A production implementation must classify failures: invalid credentials, for example, are not evidence of congestion. Timeouts can indicate overload, but also failures elsewhere in the path.
 
 Over time the target traces a sawtooth: slow growth, a sharp drop, then slow growth again. The asymmetry is intentional. Capacity should be explored without producing a large burst, but evidence of overload should remove pressure quickly.
 
@@ -79,7 +81,7 @@ Delay is earlier feedback than loss, but it is not free information. The system 
 
 ### 5. The polite client can lose
 
-Delay-based control is not automatically fair. Imagine a fixed-rate client competing with a Vegas client for the same worker. As the queue grows, Vegas sees delay and yields. The fixed-rate client does not react, so it immediately fills the capacity Vegas released. Being more responsive has reduced the polite client’s share without fixing the queue.
+Delay-based control is not automatically fair. Imagine a fixed-rate client competing with a Vegas client for the same worker. As the queue grows, Vegas yields while the fixed-rate client keeps offering the same load. The fixed-rate client can retain a larger share; if its load alone is excessive, Vegas cannot drain the queue by backing off.
 
 Unequal shares can also persist between two adaptive clients. An established or higher-rate client may begin with a larger window. If both reduce their limits proportionally, the ratio between them can survive every backoff. Reversing arrival order can reverse the result.
 
@@ -89,7 +91,7 @@ This is why endpoint details include completed rate per client and a Jain fairne
 fairness = (Σx)² / (n × Σx²)
 ```
 
-It is `1` when shares are equal and falls as they diverge. The score does not tell us which allocation is morally or operationally correct—some clients may deserve different weights—but it prevents a stable aggregate rate from masquerading as a fair outcome.
+For nonzero total throughput, it is `1` when shares are equal and falls as they diverge. Equal shares are not always the policy we want—clients may have different weights—but stable aggregate throughput alone cannot establish fairness.
 
 Low latency is a system outcome. Voluntary restraint is a client behaviour. They align only when participants react compatibly, or when a scheduler at the contested resource enforces the desired allocation.
 
@@ -97,7 +99,7 @@ Low latency is a system outcome. Voluntary restraint is a client behaviour. They
 
 Fairness and model freshness both require convergence mechanisms. A controller that only reacts to its current observations can become trapped by them: routing away from an endpoint removes samples, an inflated minimum RTT hides a queue, and proportional backoff preserves unequal shares.
 
-We can borrow three useful shapes from BBR-style control without pretending that independent RPCs are TCP packets:
+The following are possible extensions, not phases implemented by this simulator. BBR-style control suggests three useful patterns:
 
 - **Probe up:** occasionally test whether more capacity is available. Jitter the timing so every client does not increase in lockstep.
 - **Drain:** occasionally reduce outstanding work long enough to seek an unloaded RTT sample.
@@ -109,15 +111,15 @@ These phases have a real cost. Draining can briefly under-utilise a worker; prob
 
 Probing can improve fairness, but it cannot guarantee it. Strict allocation belongs in a scheduler at the resource where clients actually contend.
 
-*Reference:* [The BBRv3 specification](https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/) describes randomised ProbeBW timing, bandwidth headroom, and coordinated ProbeRTT episodes.
+*Reference:* [The BBR Internet-Draft](https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/) develops bandwidth probing and RTT-refresh mechanisms for transport congestion control.
 
 ### 7. Gradient2 follows the trend
 
-This is where the production story returns. Vegas compares current latency with a minimum; Gradient2 instead compares two exponentially weighted moving averages for each Postgres endpoint: a responsive short-term connection latency and a slower long-term latency. Their ratio describes direction. When the short estimate rises above the long estimate for several observations, latency is worsening; when they converge, the path is stable enough to explore cautiously.
+This is where the production story returns. Rather than relying on one minimum RTT, Gradient2 compares short- and long-term latency estimates. A short-term estimate above the longer-term baseline suggests delay is growing. That gives the controller a reason to retreat before attempts fail. Convergence is not proof of an empty queue: both estimates can settle at an elevated latency.
 
-The simulator’s controller does not react to one noisy sample. It warms both estimates, requires a sustained trend, and enters a cooldown after backing off. It also retains an estimate of queued work as a second delay signal so that a high-limit client continues correcting after both averages flatten at an elevated level. Rejection remains an immediate backoff signal.
+The simulator uses a Gradient2-inspired variant, not a reproduction of Netflix’s implementation or our production configuration. Its two exponentially weighted estimates warm up before trend decisions; sustained divergence triggers backoff followed by a cooldown. It also uses a minimum-RTT queue estimate as a guard when both averages flatten. Rejection triggers immediate backoff.
 
-Gradient2 reduces dependence on one permanently correct minimum RTT, but it introduces its own tuning choices: the two smoothing periods, divergence threshold, consecutive-trend count, cooldown, and increase and decrease gains. Exposing those stages is important because a controller that oscillates for unexplained reasons is not an improvement over a fixed magic number.
+This variant trades dependence on a single baseline for more tuning choices: smoothing periods, divergence threshold, trend count, cooldown, and adjustment gains. Those are choices in this model, not a universal Gradient2 recipe.
 
 *Reference:* Netflix’s [`concurrency-limits`](https://github.com/Netflix/concurrency-limits) project describes the Vegas and Gradient2 algorithms that inspired this model.
 
@@ -133,9 +135,11 @@ Little’s Law gives us a smoother implementation. For each client–worker pair
 λ = L / W
 ```
 
-A GCRA-style theoretical-arrival clock then spaces requests at that average rate. A target of `1.3` becomes a sequence of individual admissions over time rather than an impossible fractional request. The concurrency target remains the safety model; pacing is how we realise it without a microburst.
+A GCRA-style theoretical-arrival clock spaces requests at that rate. A target of `1.3` influences the spacing between individual admissions rather than requiring a fractional permit.
 
-The pacing state must belong to the endpoint just like the RTT estimates and limit. If Power of Two sends a request elsewhere, that should not reset this endpoint’s clock. If neither sampled endpoint is eligible, the request waits in the bounded client-side admission queue instead of bypassing control.
+This targets average concurrency; it does **not** enforce a hard in-flight cap. If latency jumps before the estimate catches up, work can accumulate above the target. A production design that needs a strict ceiling must enforce one separately.
+
+The pacing state belongs to the endpoint, just like RTT estimates and the target. Sending elsewhere does not reset its clock. If neither sampled endpoint is eligible, the simulated client retains its pending choice and waits. This is not a model of an upstream queue with arrivals and deadlines.
 
 Pacing does not create capacity, and short measurement windows can make it appear slower than a burst. Over a sufficiently long interval, paced and bursty implementations of the same average target should offer comparable work. The useful difference is lower queue peaks, not a magically higher rate.
 
@@ -147,19 +151,19 @@ Power of Two asks **where** a request should go. The endpoint controller asks **
 
 For a database route with one eligible Postgres VM, the first decision is already made and only admission remains. The two-choice path applies when the same work can use multiple replicas or endpoints; it is an extension of the original proxy problem, not a claim that every database connection is freely movable.
 
-After sampling two workers, the client scores both and tries the better candidate first. If that endpoint has no admission budget, the second sampled endpoint may still accept the request. If neither is eligible, the request waits in a bounded client-side queue until one of those choices gains capacity.
+After sampling two workers, the client scores both and tries the better candidate first. If that endpoint has no admission budget, the second may accept the request. If neither is eligible, the client waits until one of those choices gains capacity.
 
-The word “sampled” is a safety property. Repeatedly drawing new pairs until some worker accepts the request would turn a two-choice algorithm into an unbounded scan and quietly defeat every local limit. A blocked request therefore retains its candidates instead of resampling its way around congestion control.
+Retaining the candidates preserves the routing policy. Repeatedly drawing new pairs until one accepts would still respect each endpoint’s admission limit, but would turn two-choice placement into a search for any available budget. That changes the load distribution and can make routing more expensive under saturation.
 
 Client-side waiting must remain bounded and deadline-aware. A request that cannot be admitted in time should fail before consuming downstream resources. Retries return to the same decision path; they do not receive a secret route around the controller.
 
-The complete client is now a load balancer plus a collection of endpoint-specific feedback loops, not one service-wide magic number.
+The client therefore needs both a placement policy and endpoint-specific admission control.
 
 ### 10. Stale endpoints need exploration
 
 Good routing creates an information problem. When a worker becomes slow, its score rises and Power of Two sends it less work. Fewer requests mean fewer RTT samples. If the worker later recovers, its stale estimate can keep it looking bad, so the decision that protected us during failure can starve healthy capacity indefinitely.
 
-Random candidate selection gives every endpoint some chance of being reconsidered, but a worker that repeatedly loses the comparison still needs bounded probe eligibility. New and stale endpoints should occasionally receive a request even when their estimates are incomplete or pessimistic. Probe times should be jittered across clients and followed by a cooldown after failure so that discovery does not become a coordinated burst.
+Random candidate selection gives every endpoint a chance of being reconsidered. For stronger recovery guarantees, a production design could add bounded probe eligibility for endpoints that repeatedly lose the comparison. This is another extension beyond the simulator: occasionally admit a probe despite a pessimistic score, jitter its timing across clients, and back off after failure.
 
 Cold endpoints should be neither infinitely attractive nor permanently bad. Treating them as perfect sends an arrival burst to every new replica; treating them as unusable means they never warm. A small explicit probe budget states the trade-off honestly.
 
@@ -171,7 +175,7 @@ With `C` proxy instances and `W` active Postgres destinations, the system can co
 
 This is more state than one service-wide limiter, but it is state about the thing we need to control. A slow worker should reduce only the windows targeting it. A client with an unusual network path should not overwrite every other client’s latency estimate.
 
-Removal is similarly local. Deleting a client cancels its outstanding work without fabricating server rejections. Deleting a worker cancels or drains only jobs assigned to that destination, while surviving endpoint histories remain intact. Discovery events should not reset the whole feedback system merely because resetting produces a tidy graph.
+In the simulator, removing a client or worker cancels affected jobs without counting them as server rejections. Surviving endpoint histories remain intact. Real cancellation is less immediate: abandoning an attempt locally does not guarantee that all downstream work has stopped. Production scale-down needs explicit draining and deadline handling.
 
 These transients are algorithm behaviour, not animation noise. In an autoscaled deployment the system may spend much of its life warming new pairs, draining old ones, and adapting to a moving topology. A controller that looks wonderful only after 150 quiet seconds has not solved the production problem.
 
@@ -188,13 +192,13 @@ Evaluate the whole loop with the vocabulary from [part one](/posts/congestion-co
 
 Breakdowns matter as much as totals. Aggregate utilisation can hide one hot worker beside one idle worker. Aggregate throughput can hide a client receiving almost nothing. A low server queue can hide a large client-side queue. The location of waiting is part of the result.
 
-This is also why the deterministic tests behind these simulations record checkpoints rather than asserting one final number. They cover transient and steady-state statistics by client, worker, and client–worker pair. The scenarios verify the claims made here: fixed rate remains overloaded after scale-out, fixed concurrency lowers admissions when work slows, Vegas can reduce loss and latency relative to loss-based control, delay-sensitive clients can lose to aggressive ones, and paced fractional targets avoid integer bursts.
+The deterministic tests record checkpoints and per-client, per-worker statistics for selected scenarios. They check behaviours such as fixed-rate overload after scale-out and reduced admissions under fixed concurrency when work slows. These are regression tests for the model, not proof of production stability or a benchmark of the original algorithms. Upstream waiting, retries, and timeouts need separate evaluation because this simulator does not model them.
 
 There is no single best controller independent of whether the objective is latency, utilisation, stability, fairness, or recovery speed.
 
 ### 13. The final lesson
 
-Rate limits, concurrency limits, Power of Two, Vegas, Gradient2, Little’s Law, GCRA, and probing are not competing magic numbers. They occupy different places in one feedback system:
+The pieces now have distinct jobs:
 
 1. endpoint discovery determines the possible destinations;
 2. when several destinations are eligible, Power of Two chooses two candidates without scanning the fleet;
@@ -207,7 +211,7 @@ The design does not make overload impossible. Demand can jump faster than any sa
 
 Fixed rate remains a good answer when its assumptions are stable. Fixed concurrency is a remarkably effective next step because duration feeds back into admissions automatically. Delay controllers move the signal earlier, but pay for that advantage with baseline, fairness, exploration, and tuning problems. Pacing preserves fractional decisions, while bounded queues and loss remain essential safety signals rather than evidence that the rest of the design failed.
 
-For our Postgres proxy, that path led from a static concurrency problem, through AIMD’s late timeout signal, to Gradient2’s view of rising connection latency. The general model grew around it because the same controller must remain understandable when proxy instances restart, Postgres VMs resize, measurements go stale, and multiple eligible endpoints do exist.
+For our Postgres proxy, the decisive observation was the full accept queue: waiting for timeouts let too much work accumulate. That motivated our move from AIMD to Gradient2. The broader model helps explore what happens when proxies restart, VMs resize, or independent controllers disagree about the same endpoint.
 
 The durable question is not “which limiter should I copy?” It is:
 

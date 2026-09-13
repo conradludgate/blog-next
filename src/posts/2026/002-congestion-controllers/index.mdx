@@ -17,21 +17,21 @@ export const meta = {
 
 This series began with a production problem. At work, I maintain a Postgres proxy for Neon/Lakebase. Each region runs several proxy instances for high availability, shared by many thousands of active databases. Behind them are thousands of Postgres VMs running different workloads on different compute sizes. Both fleets scale up and down over time.
 
-Clients connect to the proxy, and the proxy establishes the corresponding connection to Postgres. We found that simply forwarding every connection attempt as soon as it arrived could overwhelm a Postgres VM. Limiting the number of downstream connection attempts in flight worked better: excess attempts waited briefly at the proxy rather than piling into a less controllable queue around Postgres.
+Clients connect to the proxy, which establishes the corresponding connection to Postgres. Forwarding every attempt immediately could overwhelm a Postgres VM. Throttling attempts and limiting how many were in flight worked better.
 
-The difficult part was choosing the limit. One proxy instance sees only its own traffic. Adding another proxy adds another independent source of connection attempts, while replacing or resizing a Postgres VM changes the capacity on the other side. The databases themselves range from quiet development projects to demanding production workloads. No static number describes all of those combinations for long.
+The unit we are limiting is **connection establishment**, not the lifetime of an open session or the number of concurrent SQL queries. Once an attempt finishes, it releases its permit; the established connection can remain open. This is not a replacement for Postgres’s connection limit.
 
-This first part builds the problem from first principles. We will make the hidden queues visible and compare fixed rate with fixed concurrency as both sides change. This is an explanatory sequence rather than the production chronology: we already knew a static limit would not survive this topology, so our first real controller was AIMD. [Part two](/posts/adaptive-congestion-control) follows that implementation path.
+The difficult part was choosing the limit. Each proxy sees only its own traffic. Adding proxies increases the number of independent senders; resizing a Postgres VM or changing its workload changes how quickly it can accept connections. A limit must follow both.
 
-The simulator also generalises the topology so that a client can sometimes choose between several eligible workers. In the original proxy path, routing a database to one Postgres VM is the one-candidate case.
-
-By the end, we will have a realistic request path and a way to recognise the useful operating point of each worker. [Part two](/posts/adaptive-congestion-control) turns those measurements into adaptive per-worker limits and paced admissions, then deals with fairness, stale observations, and production scaling.
+This part uses fixed rate and fixed concurrency to explain the problem. That is a teaching sequence, not our production chronology: our first controller was AIMD. Part two follows the move from AIMD to Gradient2 and explores the design questions around it.
 
 ## Prelude: why not just send everything?
 
 In the diagrams, a **client** is a proxy instance and a **worker** is a destination Postgres VM. Each coloured dot is an attempt to establish a downstream connection. The worker’s small FIFO abstracts the finite places where connection establishment can wait—most importantly the kernel’s TCP listen and accept path, but also scheduling and startup work inside the process.
 
-The model is intentionally broader than the incident. Some services have several interchangeable workers or read replicas, in which case the client also chooses a destination. A database route may expose only one eligible VM, in which case the choice is trivial but the admission problem is unchanged. Each proxy still needs local state for every Postgres endpoint it is actively contacting.
+The model also allows a client to choose among interchangeable workers. That is an extension, not a claim that unrelated databases can serve each other’s connections. With one eligible Postgres VM, placement is already decided; admission control still matters.
+
+The simulator is not a TCP or Postgres implementation. It models network delay, a bounded worker queue, and service time. It does not model handshakes, retries, timeouts, or a stream of upstream arrivals. Each simulated client always has more work available. The numbers illustrate feedback behaviour, not production capacity.
 
 The tempting policy is to begin every downstream connection as soon as the upstream client arrives. If Postgres cannot accept it, return an error and let the client retry.
 
@@ -54,7 +54,7 @@ So our problem is not whether requests should ever wait. They inevitably will. T
 - Which worker should receive the next request?
 - What observation tells a client to slow down—or that it is safe to speed up again?
 
-The rest of the article will answer those questions by changing one part of a running system at a time. The clock will continue to move, but every experiment will ask you to perturb the system and watch how it responds.
+The experiments change one condition at a time so we can see which policy responds.
 
 ## 1. A limit that worked yesterday
 
@@ -66,13 +66,7 @@ Each interactive section introduces a fresh copy of the same simulator, already 
 
 Watch **completed throughput** as well as offered load. More attempts do not necessarily mean more established connections. The queue shows waiting directly, while duration includes the time successful attempts spend reaching the worker, waiting, and being accepted.
 
-The rate and concurrency experiments later in the article begin from the same healthy one-client topology and apply the same processing-time increase. A rate budget does not shrink when work becomes slower. A concurrency permit stays occupied until the request finishes, so the rate of new admissions falls naturally. Compare their responses rather than treating the absolute numbers as a controller benchmark.
-
-Concurrency connects rate and duration: in steady state, average work in flight equals completed throughput multiplied by average latency. A fixed concurrency limit therefore reduces the sending rate as latency rises. An adaptive controller goes further by changing the target itself; pacing turns that potentially fractional target into spaced-out requests.
-
-We now have the central question for the rest of the article: **which observation should make a client change its limit?** Loss provides an explicit signal, but only after a queue refuses work. Delay can warn earlier, but separating service time from queueing—and sharing capacity fairly—takes more care.
-
-The rest of the article follows that question through increasingly realistic models. Each step keeps the routing topology fixed unless it is the thing being studied, so an improvement in admission control is not accidentally credited to a better load balancer.
+The rate and concurrency experiments start with the same topology and apply the same slowdown. Compare how they respond, not just their final numbers.
 
 ## Act one: learn to see congestion
 
@@ -85,13 +79,13 @@ A request is not an abstract counter. From the client’s point of view it begin
 3. receive service from the worker; and
 4. travel back to the client.
 
-Only the third stage performs the useful work that the worker exists to do. All four consume the request’s deadline, and the client normally observes only their sum.
+All four consume the request’s deadline; only service advances the worker’s operation. A real client usually observes their sum. The simulator ends an attempt when service completes, without a separate return-network stage, so its displayed RTT is a simplified duration.
 
 That distinction matters whenever we interpret latency. Suppose a worker takes one second to process a request. An observed duration of three seconds does not mean the operation itself became three times as expensive. The request may have spent two seconds waiting behind earlier work. Conversely, a worker can become slower without forming a queue if admissions fall quickly enough. The same end-to-end metric can therefore describe different internal states.
 
 Throughout the visualisations, moving dots are requests. A dot crossing the middle is in the network or being routed; a dot parked in front of a worker is queued; a dot attached to a worker is being processed. Pausing freezes the motion without changing the model. This is not just decoration: the physical position of a request explains why its measured duration can be much greater than its service time.
 
-Once we can see the stages, queueing latency stops being mysterious. It is simply stored unfinished work, paid for one request at a time.
+A longer duration tells us something changed. The visible queue helps explain what.
 
 ### 3. Name the health signals
 
@@ -101,7 +95,7 @@ We need more than one number to describe whether this system is behaving well. T
 
 - **Rate:** how much work is offered and how much completes.
 - **Errors:** how much work is rejected or fails.
-- **Duration:** how long successful work takes, usually including tail percentiles such as p99.
+- **Duration:** how long work takes, including tail percentiles such as p99. Here the latency metrics include only successful attempts; failures are counted separately.
 
 **USE** describes the worker resources:
 
@@ -145,9 +139,9 @@ We still need to define “better.” Choosing the endpoint with the lowest raw 
 score = (in_flight + 1) × smoothed_RTT
 ```
 
-The `+1` estimates the cost of the request we are about to add. Multiplying by recent round-trip time combines how much work is ahead of us with roughly how expensive that work has been. The score is deliberately local: two clients can assign different scores to the same worker because they have seen different requests.
+The `+1` includes the proposed request. This is a ranking heuristic, not a prediction of queue time: in-flight work includes network and service time, and RTT already includes waiting. Two clients can score the same worker differently because they have seen different requests.
 
-Power of Two will be the common routing layer for the rest of the article. When we compare rate, concurrency, and adaptive controllers, they all receive the same two candidates and the same placement rule. That keeps us from crediting admission control for an improvement that actually came from better routing.
+All controllers use this same sampling and placement rule. Their admission decisions can produce different subsequent request sequences, but we do not switch routing algorithms between comparisons.
 
 *Reference:* [Mitzenmacher’s original treatment of the Power of Two Choices](https://www2.eecs.berkeley.edu/Pubs/TechRpts/1996/7979.html) develops the randomized-allocation result behind this routing rule.
 
@@ -183,7 +177,7 @@ A reasonable local rate becomes a much larger system-wide rate when the proxy fl
 
 With four workers and a `0.5/s` per-endpoint rate, one client can offer `2/s`. Two clients can offer `4/s`; eight can offer `16/s`. Autoscaling the caller has multiplied pressure on the callee even though no configuration value changed.
 
-Run the experiment, then add clients one at a time. Predict the total offered rate before each click. Continue until waiting persists and the bounded queues begin to reject work.
+Run the experiment, then add clients one at a time. Predict the combined rate budget before each click; actual admissions can be lower when the sampled endpoints are not eligible. Continue until waiting persists and the bounded queues begin to reject work.
 
 <CongestionSimulator challenge="fixed-rate-client-scale" />
 
@@ -203,7 +197,7 @@ We now have incompatible requirements for a static number. It should grow when w
 
 Capacity changes even when replica counts do not. For Postgres connection establishment, VM size, CPU pressure, authentication work, process startup, and the database’s current workload all affect how quickly new sessions can be accepted. A rate that was conservative a moment ago can become excessive without any deployment or discovery event.
 
-The next experiment begins below capacity. Keep the controller and topology fixed, start the simulation, and change service time from one second to three seconds. The configured arrival rate will not move. Watch utilisation, waiting, duration, and finally rejection respond in that order.
+The next experiment begins below capacity. Keep the controller and topology fixed, start the simulation, and change service time from one second to three seconds. The rate budget will not move. Watch the queues grow, then compare completed rate, duration, and rejection.
 
 <CongestionSimulator challenge="fixed-rate-slowdown" />
 
@@ -213,7 +207,9 @@ Rate controls arrivals, but it does not directly bound the amount of unfinished 
 
 ### 12. The bounded queues have a job to do
 
-A bounded queue converts unlimited waiting into explicit rejection. That protects memory, connection state, and deadline budget from growing without limit. In the production failure that motivated this work, however, the relevant bound was not initially an application queue we controlled: the Linux TCP accept queue filled first. By the time attempts timed out, connection latency had already been warning us that work was accumulating.
+The simulator rejects an attempt immediately when the worker queue is full. A real kernel queue need not produce such a clean signal: a full TCP listen backlog can lead to ignored attempts and retransmissions rather than an immediate error. Linux also distinguishes incomplete handshakes from established sockets waiting for the application to accept them. See [`listen(2)`](https://man7.org/linux/man-pages/man2/listen.2.html).
+
+In our production incident, the TCP accept queue filled and we saw high connection latencies and timeouts. Its finite size bounded that queue, but did not keep connection establishment healthy.
 
 The bound is protection, not a target. A queue does not need to be full before it becomes harmful. Every occupied slot represents a request paying additional latency without increasing the worker’s instantaneous throughput. When demand falls, rejection stops as soon as space reappears, but duration remains elevated until the old work drains.
 
@@ -243,9 +239,9 @@ Little’s Law relates the quantities we can observe:
 L = λW
 ```
 
-`L` is the average number of requests in the system, `λ` is completed throughput, and `W` is average time in the system. If an endpoint completes one request per second with an average round-trip time of 1.3 seconds, it will have about 1.3 requests in flight on average.
+`L` is average work in flight, `λ` is the rate at which that work leaves the system, and `W` is its mean residence time, under stable long-run conditions. All three must describe the same population and measurement boundary. Do not multiply successful throughput by successful latency and call the result total in-flight work when failures also occupy the system. Nor can p99 replace the mean.
 
-This explains why a fixed concurrency window becomes an implicit variable rate: rearranging the equation gives `λ = L / W`. As duration grows while `L` stays fixed, the achievable admission rate falls.
+With no failures, one completion per second and a mean duration of 1.3 seconds imply 1.3 attempts in flight on average. Rearranging gives `λ = L / W`: if an occupied concurrency window stays fixed while duration grows, throughput falls. A configured limit bounds concurrency; it is not necessarily the measured average `L`.
 
 The word “average” is important. A controller target of `1.3` requests is meaningful even though an individual request is indivisible. Rounding it to an integer throws away information and creates abrupt changes around every boundary. Later we will use the target and measured RTT to pace discrete requests at the corresponding average rate.
 

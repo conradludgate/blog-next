@@ -25,48 +25,27 @@ The difficult part was choosing the limit. Each proxy sees only its own traffic.
 
 This part uses fixed rate and fixed concurrency to explain the problem. That is a teaching sequence, not our production chronology: our first controller was AIMD. Part two follows the move from AIMD to Gradient2 and explores the design questions around it.
 
-## Prelude: why not just send everything?
+## 1. Follow one connection
 
-In the diagrams, a **client** is a proxy instance and a **worker** is a destination Postgres VM. Each coloured dot is an attempt to establish a downstream connection. The worker’s small FIFO abstracts the finite places where connection establishment can wait—most importantly the kernel’s TCP listen and accept path, but also scheduling and startup work inside the process.
+In the diagrams, a **client** is a proxy instance, a **worker** is a destination, and each dot is a connection attempt. Start with just one of each. The client waits for its current attempt to finish before sending another.
 
-The model also allows a client to choose among interchangeable workers. That is an extension, not a claim that unrelated databases can serve each other’s connections. With one eligible Postgres VM, placement is already decided; admission control still matters.
+Run the simulator, then change service time to **3s**. Follow a dot as it travels to the worker and stays there longer. Use **½ speed** or **Pause** to inspect it.
 
-The simulator is not a TCP or Postgres implementation. It models network delay, a bounded worker queue, and service time. It does not model handshakes, retries, timeouts, or a stream of upstream arrivals. Each simulated client always has more work available. The numbers illustrate feedback behaviour, not production capacity.
+<CongestionSimulator challenge="request-path" />
 
-The tempting policy is to begin every downstream connection as soon as the upstream client arrives. If Postgres cannot accept it, return an error and let the client retry.
+The next attempt starts later even though we did not change a rate setting. Keeping work in flight bounded makes admissions respond to duration. We will return to that effect after trying a fixed rate.
 
-This works while demand is comfortably below capacity. More requests produce more completed work, so the system appears to reward us for driving it harder. The problem begins near saturation. A worker can only process so many requests at once; additional requests must wait. Every waiting request consumes time and usually some combination of memory, connection state, task state, and deadline budget without increasing the worker’s useful throughput.
+Every experiment starts fresh. Only the controls relevant to its question are enabled; scrolling away pauses it, and returning preserves its state.
 
-Removing an explicit application queue does not remove this waiting. It moves it. Connection attempts can accumulate in the proxy, in socket state, in the kernel’s SYN or accept queues, or behind scheduling inside Postgres. The caller experiences all of these locations as increased connection latency even when no application-level queue is visible.
+The model includes network delay, a bounded worker queue, and service time. It does not implement TCP, Postgres, retries, timeouts, or upstream arrivals. Each client always has more work available. Later examples allow several interchangeable workers; unrelated databases are never interchangeable destinations.
 
-Eventually requests wait longer than their deadlines. Some may still reach the worker and consume resources even though the caller no longer wants their answers. Others are cancelled, rejected, or retried. A retry is particularly dangerous during overload: it turns evidence that the system has too much work into another piece of work. If many callers make the same reasonable local decision, they can keep a recovering service overloaded long after the original burst has ended.
+### Why not just send everything?
 
-Real services can also lose useful capacity under pressure. They spend more time managing queues, allocating memory, switching tasks, contending on locks, cleaning up cancelled work, and producing responses that arrive too late to be useful. Offered load continues to rise while completed, useful throughput flattens or even falls.
+An overloaded destination must make incoming work wait somewhere. Removing an application queue can move that waiting into socket state or the kernel’s accept queue. Callers still pay the latency, and retries can add more load before the destination has recovered.
 
-The alternative is to apply backpressure before each downstream connection attempt. When a Postgres endpoint appears busy, the proxy can hold the attempt briefly and admit it when capacity becomes available. Waiting at the proxy makes the queue intentional: it can be bounded, included in the connection deadline, cancelled before consuming downstream resources, and paced so that released work does not arrive in another burst.
+Holding attempts at the proxy gives us a place to bound waiting and enforce deadlines before consuming downstream resources. That queue must have a limit too: if it is full, or an attempt cannot be admitted before its deadline, waiting longer is not a solution.
 
-This does not mean waiting forever. If the client-side queue is full or the request cannot be dispatched within its deadline, rejection is the honest outcome. Otherwise backpressure would merely exchange server overload for unbounded memory growth and enormous latency in the caller. Retries must enter the same admission path as original attempts; they cannot be allowed to bypass the very mechanism protecting the service.
-
-So our problem is not whether requests should ever wait. They inevitably will. The questions are:
-
-- Where should they wait?
-- How much waiting work should be allowed?
-- Which worker should receive the next request?
-- What observation tells a client to slow down—or that it is safe to speed up again?
-
-The experiments change one condition at a time so we can see which policy responds.
-
-## 1. A limit that worked yesterday
-
-Start with one proxy and four workers. Every coloured dot is a downstream connection attempt, and every worker has a small queue of its own. Where multiple destinations are eligible, the proxy samples two and uses its own latency and in-flight observations to choose between them. A singleton destination follows the same admission path without the comparison.
-
-First we limit how often requests can start. Each client may send at most half a request per second to each worker. This is a local budget: adding another client adds another set of budgets. No existing client is told to give up part of its allowance.
-
-Each interactive section introduces a fresh copy of the same simulator, already configured for the idea beside it. The controls do not perform a scripted demonstration: the experiment describes an outcome, and you must decide which ordinary client, worker, processing-time, or controller control will produce it. The checks turn green only after the simulator observes the result.
-
-Watch **completed throughput** as well as offered load. More attempts do not necessarily mean more established connections. The queue shows waiting directly, while duration includes the time successful attempts spend reaching the worker, waiting, and being accepted.
-
-The rate and concurrency experiments start with the same topology and apply the same slowdown. Compare how they respond, not just their final numbers.
+The question is how much work to let through. First, let’s make the cost of waiting visible.
 
 ## Act one: learn to see congestion
 
@@ -160,6 +139,12 @@ This table exists per client. With `C` clients and `W` workers, there can be `C 
 Newly discovered endpoints begin cold. They must not silently inherit the fleet average: a replacement instance might have different hardware, a cold cache, or a failure mode that the existing workers do not share. Nor should a cold endpoint be treated as infinitely bad and starved of the requests needed to measure it.
 
 Routing and congestion control use this same memory but answer different questions. Routing asks, “which of these candidates looks better?” Congestion control asks, “is it safe to send another request there at all?” Keeping those questions separate will become important when both sampled workers are busy.
+
+Try adding destinations to see why that state is per endpoint. This example starts with one worker and one in-flight permit per endpoint. Run it, note the completed rate, then add workers until there are four. The client gains a separate permit for each new destination.
+
+<CongestionSimulator challenge="concurrency-worker-scale" />
+
+Completed throughput rises as the client uses the new endpoints. This is why we keep limits per destination: a single global window would not automatically make room for added capacity.
 
 ## Act three: fixed limits meet a changing fleet
 

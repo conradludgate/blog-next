@@ -35,6 +35,12 @@ Our simulator uses successful attempts for increase and queue rejection for back
 
 Over time the target traces a sawtooth: slow growth, a sharp drop, then slow growth again. The asymmetry is intentional. Capacity should be explored without producing a large burst, but evidence of overload should remove pressure quickly.
 
+Run this example, then add two clients. Watch the queue and rejection rate. Open **Endpoint details** to see individual limits increase and retreat; their changes need not happen together.
+
+<CongestionSimulator challenge="aimd-client-scale" />
+
+Rejection means the bounded queue has already run out of room. That is the weakness we want to address next: can a successful but increasingly slow attempt tell us to back off sooner?
+
 The feedback remains local. A rejection from worker 2 reduces the window that this client uses for worker 2; it does not reset every endpoint in the client, much less every other client. That isolation is valuable when only one worker is slow, but it also means that every client must discover the congestion for itself.
 
 AIMD is simple and robust, but its signal is deliberately late. In our case, the kernel accept queue could already be full before connection attempts timed out. We already had an earlier observation available at the proxy—connection duration was rising while the queue filled—so the next question was whether the client could retreat before loss.
@@ -55,6 +61,12 @@ This can respond while a queue is forming rather than waiting for it to become f
 
 The qualification matters. Vegas has not measured queue time directly. It inferred it from a baseline, and both the quality of that baseline and the behaviour of competing clients affect the result.
 
+Try a different disturbance here. Let the client gather some successful samples, then change service time to **3s**. Watch RTT and limits in **Endpoint details**, alongside the queue. A rising RTT can change the target even when requests still succeed.
+
+<CongestionSimulator challenge="vegas-slowdown" />
+
+The controller sees the slowdown, but it cannot tell directly how much came from service and how much came from waiting. That ambiguity is the cost of using delay.
+
 *Reference:* Brakmo and Peterson introduced the delay-based mechanism in [“TCP Vegas: End to End Congestion Avoidance on a Global Internet”](https://doi.org/10.1109/49.464716).
 
 ### 3. Delay feedback is local
@@ -69,51 +81,7 @@ Start the next experiment and add two clients. Open the endpoint details after t
 
 The controller targets do not need to match for aggregate throughput to look stable. That is precisely the point: a local measurement can be internally consistent while still encoding an accident of arrival order. The fairness values in endpoint details make that difference visible instead of averaging it away.
 
-### 4. Why a clean minimum RTT is hard
-
-A newly started proxy that arrives behind an existing queue may never observe the unloaded path. Its first successful connection includes queueing delay, yet that attempt establishes the best baseline it knows. Relative to the inflated minimum, later congestion looks smaller than it really is.
-
-The opposite failure is possible too. A minimum RTT that never expires can become stale after routing changes, hardware replacement, or a permanent shift in service time. Expire it too eagerly, however, and persistent congestion can establish a new, higher “minimum” that teaches the controller to accept the queue.
-
-Natural variation makes the separation harder. RTT combines propagation, routing, scheduling, service, and waiting; the client cannot label those components from one sample. A clean baseline usually requires an interval in which the queue is deliberately drained, plus occasional exploration to discover that an endpoint’s condition has changed.
-
-Delay is earlier feedback than loss, but it is not free information. The system must create opportunities to refresh the model on which that feedback depends.
-
-### 5. The polite client can lose
-
-Delay-based control is not automatically fair. Imagine a fixed-rate client competing with a Vegas client for the same worker. As the queue grows, Vegas yields while the fixed-rate client keeps offering the same load. The fixed-rate client can retain a larger share; if its load alone is excessive, Vegas cannot drain the queue by backing off.
-
-Unequal shares can also persist between two adaptive clients. An established or higher-rate client may begin with a larger window. If both reduce their limits proportionally, the ratio between them can survive every backoff. Reversing arrival order can reverse the result.
-
-This is why endpoint details include completed rate per client and a Jain fairness score. For throughputs `x₁ … xₙ`, the score is:
-
-```text
-fairness = (Σx)² / (n × Σx²)
-```
-
-For nonzero total throughput, it is `1` when shares are equal and falls as they diverge. Equal shares are not always the policy we want—clients may have different weights—but stable aggregate throughput alone cannot establish fairness.
-
-Low latency is a system outcome. Voluntary restraint is a client behaviour. They align only when participants react compatibly, or when a scheduler at the contested resource enforces the desired allocation.
-
-### 6. Probe, drain, and leave headroom
-
-Fairness and model freshness both require convergence mechanisms. A controller that only reacts to its current observations can become trapped by them: routing away from an endpoint removes samples, an inflated minimum RTT hides a queue, and proportional backoff preserves unequal shares.
-
-The following are possible extensions, not phases implemented by this simulator. BBR-style control suggests three useful patterns:
-
-- **Probe up:** occasionally test whether more capacity is available. Jitter the timing so every client does not increase in lockstep.
-- **Drain:** occasionally reduce outstanding work long enough to seek an unloaded RTT sample.
-- **Cruise with headroom:** avoid occupying every last unit of estimated capacity, giving smaller or newly arrived flows room to gather evidence.
-
-Loss, explicit overload responses, or ECN-like server feedback can remain a harder second signal. They tell the controller to retreat even if its delay model is stale.
-
-These phases have a real cost. Draining can briefly under-utilise a worker; probing can briefly increase latency. Hiding that cost would make the comparison meaningless. The objective is not perfect instantaneous utilisation but better convergence after the world changes.
-
-Probing can improve fairness, but it cannot guarantee it. Strict allocation belongs in a scheduler at the resource where clients actually contend.
-
-*Reference:* [The BBR Internet-Draft](https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/) develops bandwidth probing and RTT-refresh mechanisms for transport congestion control.
-
-### 7. Gradient2 follows the trend
+### 4. Gradient2 follows the trend
 
 This is where the production story returns. Rather than relying on one minimum RTT, Gradient2 compares short- and long-term latency estimates. A short-term estimate above the longer-term baseline suggests delay is growing. That gives the controller a reason to retreat before attempts fail. Convergence is not proof of an empty queue: both estimates can settle at an elevated latency.
 
@@ -121,11 +89,17 @@ The simulator uses a Gradient2-inspired variant, not a reproduction of Netflix�
 
 This variant trades dependence on a single baseline for more tuning choices: smoothing periods, divergence threshold, trend count, cooldown, and adjustment gains. Those are choices in this model, not a universal Gradient2 recipe.
 
+Repeat the slowdown with Gradient2. Let the initial RTT estimates warm up, open **Endpoint details**, then select **3s** service time. Compare **Short RTT** and **Long RTT**: the short estimate moves first. Watch the target react as that gap develops.
+
+<CongestionSimulator challenge="gradient2-slowdown" />
+
+Both estimates eventually include the slower service. A shrinking gap does not mean service became fast again; it means the longer-term estimate caught up.
+
 *Reference:* Netflix’s [`concurrency-limits`](https://github.com/Netflix/concurrency-limits) project describes the Vegas and Gradient2 algorithms that inspired this model.
 
 Whichever delay signal we choose, the controller produces a target that can be fractional. We still need a mechanism that decides exactly when discrete requests leave.
 
-### 8. Turn a fractional window into a smooth rate
+### 5. Turn a fractional window into a smooth rate
 
 Rounding a target of `1.3` down to one request wastes the additional capacity the controller discovered. Rounding it up to two may maintain exactly the queue it was trying to remove. Alternating between integer semaphore sizes also tends to release work in bursts.
 
@@ -143,7 +117,51 @@ The pacing state belongs to the endpoint, just like RTT estimates and the target
 
 Pacing does not create capacity, and short measurement windows can make it appear slower than a burst. Over a sufficiently long interval, paced and bursty implementations of the same average target should offer comparable work. The useful difference is lower queue peaks, not a magically higher rate.
 
-## Act two: make the end state survive reality
+## Act two: share capacity and handle change
+
+### 6. Why a clean minimum RTT is hard
+
+A newly started proxy that arrives behind an existing queue may never observe the unloaded path. Its first successful connection includes queueing delay, yet that attempt establishes the best baseline it knows. Relative to the inflated minimum, later congestion looks smaller than it really is.
+
+The opposite failure is possible too. A minimum RTT that never expires can become stale after routing changes, hardware replacement, or a permanent shift in service time. Expire it too eagerly, however, and persistent congestion can establish a new, higher “minimum” that teaches the controller to accept the queue.
+
+Natural variation makes the separation harder. RTT combines propagation, routing, scheduling, service, and waiting; the client cannot label those components from one sample. A clean baseline usually requires an interval in which the queue is deliberately drained, plus occasional exploration to discover that an endpoint’s condition has changed.
+
+Delay is earlier feedback than loss, but it is not free information. The system must create opportunities to refresh the model on which that feedback depends.
+
+### 7. The polite client can lose
+
+Delay-based control is not automatically fair. Imagine a fixed-rate client competing with a Vegas client for the same worker. As the queue grows, Vegas yields while the fixed-rate client keeps offering the same load. The fixed-rate client can retain a larger share; if its load alone is excessive, Vegas cannot drain the queue by backing off.
+
+Unequal shares can also persist between two adaptive clients. An established or higher-rate client may begin with a larger window. If both reduce their limits proportionally, the ratio between them can survive every backoff. Reversing arrival order can reverse the result.
+
+This is why endpoint details include completed rate per client and a Jain fairness score. For throughputs `x₁ … xₙ`, the score is:
+
+```text
+fairness = (Σx)² / (n × Σx²)
+```
+
+For nonzero total throughput, it is `1` when shares are equal and falls as they diverge. Equal shares are not always the policy we want—clients may have different weights—but stable aggregate throughput alone cannot establish fairness.
+
+Low latency is a system outcome. Voluntary restraint is a client behaviour. They align only when participants react compatibly, or when a scheduler at the contested resource enforces the desired allocation.
+
+### 8. Probe, drain, and leave headroom
+
+Fairness and model freshness both require convergence mechanisms. A controller that only reacts to its current observations can become trapped by them: routing away from an endpoint removes samples, an inflated minimum RTT hides a queue, and proportional backoff preserves unequal shares.
+
+The following are possible extensions, not phases implemented by this simulator. BBR-style control suggests three useful patterns:
+
+- **Probe up:** occasionally test whether more capacity is available. Jitter the timing so every client does not increase in lockstep.
+- **Drain:** occasionally reduce outstanding work long enough to seek an unloaded RTT sample.
+- **Cruise with headroom:** avoid occupying every last unit of estimated capacity, giving smaller or newly arrived flows room to gather evidence.
+
+Loss, explicit overload responses, or ECN-like server feedback can remain a harder second signal. They tell the controller to retreat even if its delay model is stale.
+
+These phases have a real cost. Draining can briefly under-utilise a worker; probing can briefly increase latency. Hiding that cost would make the comparison meaningless. The objective is not perfect instantaneous utilisation but better convergence after the world changes.
+
+Probing can improve fairness, but it cannot guarantee it. Strict allocation belongs in a scheduler at the resource where clients actually contend.
+
+*Reference:* [The BBR Internet-Draft](https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/) develops bandwidth probing and RTT-refresh mechanisms for transport congestion control.
 
 ### 9. Routing and admission must cooperate
 
@@ -170,6 +188,12 @@ Cold endpoints should be neither infinitely attractive nor permanently bad. Trea
 Exploration spends a little known-good capacity to learn whether the world changed. Without it, an adaptive system can be excellent at remembering failures and terrible at noticing recovery.
 
 ### 11. Scaling without magical coordination
+
+One last experiment: run the four-worker fleet, then remove two workers. Watch completed throughput and rejection during the transition. Inspect the surviving endpoint limits; they keep their histories instead of starting over.
+
+<CongestionSimulator challenge="gradient2-worker-removal" />
+
+There is less capacity now, so recovery does not mean returning to the old throughput. It means continuing useful work at the smaller fleet’s capacity without persistent rejection.
 
 With `C` proxy instances and `W` active Postgres destinations, the system can contain up to `C × W` independently evolving endpoint controllers, although a real implementation can create them lazily. Adding a proxy creates cold state for every destination it contacts. Replacing or adding a Postgres VM creates one cold endpoint in each proxy that reaches it. Existing pairs retain their histories; nothing recomputes an equal global share.
 

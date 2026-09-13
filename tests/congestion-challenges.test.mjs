@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CONGESTION_CHALLENGES, createChallenge } from "../src/components/congestion/challenges.ts";
 import { createConditionProgress, updateConditionProgress } from "../src/components/congestion/conditions.ts";
-import { advanceSimulation, setClientCount } from "../src/components/congestion/simulation.ts";
+import { advanceSimulation, setClientCount, setWorkerCount } from "../src/components/congestion/simulation.ts";
 
 const readerChanges = {
+	"request-path": (state) => ({ ...state, serviceMs: 3000 }),
+	"concurrency-worker-scale": (state) => setWorkerCount(state, 4),
+	"aimd-client-scale": (state) => setClientCount(state, 4),
+	"vegas-slowdown": (state) => ({ ...state, serviceMs: 3000 }),
+	"gradient2-slowdown": (state) => ({ ...state, serviceMs: 3000 }),
+	"gradient2-worker-removal": (state) => setWorkerCount(state, 2),
 	"fixed-rate-client-scale": (state) => setClientCount(state, 3),
 	"fixed-rate-slowdown": (state) => ({ ...state, serviceMs: 3000 }),
 	"concurrency-slowdown": (state) => ({ ...state, serviceMs: 3000 }),

@@ -190,7 +190,7 @@ class PixiScene {
 	destroy() { this.app.ticker.stop(); this.app.destroy({ removeView: true }, { children: true }); }
 }
 
-export default function PixiCongestionScene({ state, running, playbackSpeed }: { state: SimulationState; running: boolean; playbackSpeed: number }) {
+export default function PixiCongestionScene({ state, running, playbackSpeed, active }: { state: SimulationState; running: boolean; playbackSpeed: number; active: boolean }) {
 	const hostRef = useRef<HTMLDivElement>(null);
 	const stateRef = useRef(state);
 	const runningRef = useRef(running);
@@ -201,7 +201,7 @@ export default function PixiCongestionScene({ state, running, playbackSpeed }: {
 	useEffect(() => { playbackSpeedRef.current = playbackSpeed; sceneRef.current?.setPlaybackSpeed(playbackSpeed); }, [playbackSpeed]);
 	useEffect(() => {
 		const host = hostRef.current;
-		if (!host) return;
+		if (!host || !active) return;
 		let cancelled = false;
 		let observer: ResizeObserver | undefined;
 		let themeObserver: MutationObserver | undefined;
@@ -228,7 +228,7 @@ export default function PixiCongestionScene({ state, running, playbackSpeed }: {
 		};
 		void start();
 		return () => { cancelled = true; observer?.disconnect(); themeObserver?.disconnect(); themeQuery.removeEventListener("change", redraw); sceneRef.current?.destroy(); sceneRef.current = undefined; };
-	}, []);
+	}, [active]);
 	useEffect(() => { sceneRef.current?.update(state); }, [state]);
 	return <div ref={hostRef} className={styles.SceneCanvas} style={{
 		"--desktop-scene-height": `${Math.max(420, 110 + (Math.max(state.clients.length, state.workers) - 1) * 64)}px`,

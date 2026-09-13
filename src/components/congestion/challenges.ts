@@ -3,6 +3,12 @@ import type { ControllerKind, SimulationState } from "./simulation";
 import type { LessonCondition } from "./conditions";
 
 export type CongestionChallengeId =
+	| "request-path"
+	| "concurrency-worker-scale"
+	| "aimd-client-scale"
+	| "vegas-slowdown"
+	| "gradient2-slowdown"
+	| "gradient2-worker-removal"
 	| "fixed-rate-client-scale"
 	| "fixed-rate-slowdown"
 	| "concurrency-slowdown"
@@ -26,6 +32,91 @@ export interface CongestionChallenge {
 }
 
 export const CONGESTION_CHALLENGES: Record<CongestionChallengeId, CongestionChallenge> = {
+	"request-path": {
+		id: "request-path",
+		title: "Follow one connection",
+		strategy: "concurrency",
+		clients: 1,
+		workers: 1,
+		randomSeed: 23,
+		task: "Slow service and follow a connection through the worker.",
+		controls: { processingTime: true },
+		conditions: [
+			{ id: "slow", label: "Slow service", description: "Select 3s service time.", when: (state) => state.serviceMs === 3000 },
+			{ id: "finish", label: "Watch a completion", description: "Observe a successful attempt with the slower service time.", when: (state) => state.serviceMs === 3000 && (state.p50LatencyMs ?? 0) >= 4000 },
+		],
+	},
+	"concurrency-worker-scale": {
+		id: "concurrency-worker-scale",
+		title: "Give the client more capacity",
+		strategy: "concurrency",
+		clients: 1,
+		workers: 1,
+		randomSeed: 23,
+		task: "Add workers and watch completed throughput rise.",
+		controls: { workers: true },
+		conditions: [
+			{ id: "scale", label: "Add capacity", description: "Increase from one worker to four.", when: (state) => state.workers >= 4 },
+			{ id: "use", label: "Use the new workers", description: "Sustain more than 0.6 completions per second for five seconds.", sustainMs: 5000, when: (state) => state.workers >= 4 && state.completedRate > 0.6 },
+		],
+	},
+	"aimd-client-scale": {
+		id: "aimd-client-scale",
+		title: "Wait for the loss signal",
+		strategy: "aimd",
+		clients: 2,
+		workers: 4,
+		randomSeed: 17,
+		task: "Add two clients and watch AIMD encounter rejection.",
+		controls: { clients: true },
+		conditions: [
+			{ id: "scale", label: "Add two clients", description: "Increase from two clients to four.", when: (state) => state.clients.length >= 4 },
+			{ id: "loss", label: "Observe rejection", description: "Watch rejection appear after adding clients.", when: (state) => state.clients.length >= 4 && (state.rejectionRate ?? 0) > 0 },
+		],
+	},
+	"vegas-slowdown": {
+		id: "vegas-slowdown",
+		title: "Let delay respond to slower work",
+		strategy: "vegas",
+		clients: 2,
+		workers: 4,
+		randomSeed: 23,
+		task: "Slow service and watch Vegas revise its local estimates.",
+		controls: { processingTime: true },
+		conditions: [
+			{ id: "slow", label: "Slow service", description: "Select 3s service time.", when: (state) => state.serviceMs === 3000 },
+			{ id: "feedback", label: "Observe delay feedback", description: "Let an endpoint measure the slowdown and adjust its target.", when: (state) => state.serviceMs === 3000 && state.clients.some((client) => client.endpoints.some((endpoint) => endpoint.metrics.latencyMs > 4000 && endpoint.controller.limit !== 1)) },
+		],
+	},
+	"gradient2-slowdown": {
+		id: "gradient2-slowdown",
+		title: "Follow a rising latency trend",
+		strategy: "gradient2",
+		clients: 2,
+		workers: 4,
+		randomSeed: 23,
+		task: "Slow service and compare recent RTT with its longer-term trend.",
+		controls: { processingTime: true },
+		conditions: [
+			{ id: "slow", label: "Slow service", description: "Select 3s service time.", when: (state) => state.serviceMs === 3000 },
+			{ id: "trend", label: "See the trend diverge", description: "Observe short-term RTT above long-term RTT after the slowdown.", when: (state) => state.serviceMs === 3000 && state.clients.some((client) => client.endpoints.some((endpoint) => endpoint.controller.longRtt > 0 && endpoint.controller.shortRtt > endpoint.controller.longRtt * 1.05)) },
+			{ id: "backoff", label: "Observe a backoff", description: "Wait for an endpoint to enter its backoff cooldown.", when: (state) => state.serviceMs === 3000 && state.clients.some((client) => client.endpoints.some((endpoint) => endpoint.controller.gradient2BackoffCooldown > 0)) },
+		],
+	},
+	"gradient2-worker-removal": {
+		id: "gradient2-worker-removal",
+		title: "Keep working after scale-down",
+		strategy: "gradient2",
+		clients: 2,
+		workers: 4,
+		randomSeed: 17,
+		task: "Remove two workers and watch the surviving endpoints adapt.",
+		controls: { workers: true },
+		conditions: [
+			{ id: "remove", label: "Remove capacity", description: "Reduce the fleet to two workers.", when: (state) => state.workers === 2 },
+			{ id: "continue", label: "Sustain useful work", description: "Keep completing work without rejection for five seconds after scale-down.", sustainMs: 5000, when: (state) => state.workers === 2 && state.completedRate > 0.3 && state.rejectionRate === 0 },
+		],
+	},
 	"fixed-rate-client-scale": {
 		id: "fixed-rate-client-scale",
 		title: "A fixed rate meets more clients",

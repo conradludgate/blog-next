@@ -51,6 +51,8 @@ function formatLatency(milliseconds: number): string {
 export default function CongestionSimulator({ challenge: challengeId }: { challenge: CongestionChallengeId }) {
 	const challenge = CONGESTION_CHALLENGES[challengeId];
 	const [isRunning, setIsRunning] = useState(false);
+	const hostRef = useRef<HTMLElement>(null);
+	const [isNearby, setIsNearby] = useState(false);
 	const [playbackSpeed, setPlaybackSpeed] = useState<1 | 0.5>(1);
 	const [state, setState] = useState<SimulationState>(() => createChallenge(challengeId));
 	const [conditionProgress, setConditionProgress] = useState(() => createConditionProgress(challenge.conditions));
@@ -71,6 +73,17 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 		setState(next);
 		setConditionProgress((current) => updateConditionProgress(challenge.conditions, current, next, baselineRef.current));
 	}
+
+	useEffect(() => {
+		const host = hostRef.current;
+		if (!host) return;
+		const observer = new IntersectionObserver(([entry]) => {
+			setIsNearby(entry.isIntersecting);
+			if (!entry.isIntersecting) setIsRunning(false);
+		}, { rootMargin: "200px" });
+		observer.observe(host);
+		return () => observer.disconnect();
+	}, []);
 
 	useEffect(() => {
 		if (!isRunning) return;
@@ -104,7 +117,7 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 	const controllerOptions = challenge.controls.controllerOptions;
 
 	return (
-		<section className={styles.Simulator} aria-label={`${challenge.title} simulator`}>
+		<section ref={hostRef} className={styles.Simulator} aria-label={`${challenge.title} simulator`}>
 			<div className={styles.SceneFrame}>
 				<div className={styles.Task}>
 					<span>{conditionsComplete ? "Complete" : "Goal"}</span>
@@ -180,7 +193,7 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 
 				</div>
 
-				<PixiCongestionScene state={state} running={isRunning} playbackSpeed={playbackSpeed} />
+				<PixiCongestionScene state={state} running={isRunning} playbackSpeed={playbackSpeed} active={isNearby} />
 				<p className={styles.ScreenReaderSummary}>There are {state.clients.length} clients, {state.workers} workers, and {state.queueDepth} jobs waiting. {state.dropped} jobs have been rejected.</p>
 				<div className={styles.QueueMeter}>
 					<span>Queue</span>
@@ -210,13 +223,14 @@ export default function CongestionSimulator({ challenge: challengeId }: { challe
 						<tbody>{breakdown.byWorker.map((worker, index) => <tr key={index}><th scope="row">{index + 1}</th><td>{formatMetricValue(worker.completedRate)}/s</td><td>{formatMetricValue(worker.utilisation * 100)}%</td><td>{worker.p99LatencyMs === null ? "—" : formatLatency(worker.p99LatencyMs)}</td></tr>)}</tbody>
 					</table>
 					<table>
-						<thead><tr><th>Client → worker</th><th>In flight</th><th>Limit</th><th>RTT</th></tr></thead>
+						<thead><tr><th>Client → worker</th><th>In flight</th><th>Limit</th><th>RTT</th>{state.strategy === "gradient2" && <><th>Short RTT</th><th>Long RTT</th></>}</tr></thead>
 						<tbody>{state.clients.flatMap((client, clientIndex) => client.endpoints.map((endpoint, worker) => (
 							<tr key={`${clientIndex}:${worker}`}>
 								<th scope="row">{clientIndex + 1} → {worker + 1}</th>
 								<td>{state.jobs.filter((job) => job.client === clientIndex && job.service === worker).length}</td>
 								<td>{client.strategy === "rate" ? `${RATE_PER_ENDPOINT}/s` : formatMetricValue(endpoint.controller.limit)}</td>
 								<td>{endpoint.observed ? formatLatency(endpoint.metrics.latencyMs) : "Cold"}</td>
+								{state.strategy === "gradient2" && <><td>{endpoint.controller.shortRtt > 0 ? formatLatency(endpoint.controller.shortRtt) : "Cold"}</td><td>{endpoint.controller.longRtt > 0 ? formatLatency(endpoint.controller.longRtt) : "Cold"}</td></>}
 							</tr>
 						)))}</tbody>
 					</table>

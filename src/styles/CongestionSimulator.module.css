@@ -1,0 +1,336 @@
+.Simulator {
+	--sim-border: color-mix(in srgb, var(--color-fg) 16%, transparent);
+	--sim-faint: color-mix(in srgb, var(--color-fg) 4%, var(--color-bg));
+	--sim-muted: color-mix(in srgb, var(--color-fg) 85%, var(--color-bg));
+	--sim-accent: #b44b31;
+	--sim-success: #167047;
+	--sim-play-ink: #fff;
+	font-family: system-ui, sans-serif;
+	border: 1px solid var(--sim-border);
+	border-radius: 1rem;
+	background: var(--color-bg);
+	box-shadow: 0 16px 48px -24px #0003, 0 2px 6px #00000008;
+	overflow: hidden;
+	margin: 2.25rem 0;
+	width: min(1100px, calc(100vw - 2rem));
+	margin-inline: calc((100% - min(1100px, calc(100vw - 2rem))) / 2);
+	color: var(--color-fg);
+}
+
+.SceneFrame {
+	overflow: hidden;
+	border: 0;
+	border-radius: 0;
+	background: var(--color-bg);
+
+}
+
+.Task {
+	display: flex;
+	align-items: baseline;
+	gap: 0.65rem;
+	padding: 1.1rem 1.25rem 0.6rem;
+}
+
+.Task span {
+	flex: 0 0 auto;
+	color: var(--sim-accent);
+	font-size: 0.7rem;
+	font-weight: 800;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.Task strong {
+	font-size: 0.95rem;
+	line-height: 1.35;
+}
+
+.Conditions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.35rem;
+	padding: 0 1.25rem 1rem;
+	margin: 0;
+	list-style: none;
+}
+
+.Conditions li {
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
+	padding: 0.3rem 0.6rem;
+	border: 1px solid var(--sim-border);
+	border-radius: 0.4rem;
+	color: var(--sim-muted);
+	font-size: 0.75rem;
+	line-height: 1.2;
+}
+
+.Conditions li > span { font-weight: 800; }
+.Conditions strong { font-weight: 650; }
+.Conditions .ConditionComplete {
+	border-color: color-mix(in srgb, #167047 45%, var(--sim-border));
+	color: var(--sim-success);
+	background: color-mix(in srgb, #167047 7%, var(--color-bg));
+}
+
+.Toolbar {
+	display: flex;
+	align-items: stretch;
+	flex-direction: column;
+	gap: 0.85rem;
+	padding: 0.85rem 1.25rem;
+	border-block: 1px solid var(--sim-border);
+	background: var(--sim-faint);
+}
+
+.PlaybackRow, .Playback, .ControlSets, .ControlSet, .Stepper, .Choice, .RunState {
+	display: flex;
+	align-items: center;
+}
+
+.PlaybackRow { justify-content: space-between; gap: 0.6rem; }
+
+.Playback {
+	flex: 0 0 auto;
+	gap: 0.2rem;
+	padding: 0.2rem;
+	border: 1px solid var(--sim-border);
+	border-radius: 0.65rem;
+	background: var(--color-bg);
+}
+
+.ControlSets {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 0.65rem;
+}
+
+.ControlSet {
+	gap: 0.4rem;
+	flex-wrap: wrap;
+	min-width: 0;
+	min-height: 4.5rem;
+	padding: 0.6rem 0.7rem;
+	border: 1px solid var(--sim-border);
+	border-radius: 0.6rem;
+	background: var(--color-bg);
+	font-size: 0.78rem;
+	white-space: nowrap;
+}
+
+.ControlSet > span { flex-basis: 100%; color: var(--sim-muted); font-size: 0.7rem; }
+.ControlSet > strong { font-size: 0.9rem; }
+.ControlSet > .Stepper { margin-left: auto; }
+.ControlSet > strong { font-variant-numeric: tabular-nums; }
+
+.Playback button, .ControlSet button, .ControlSet select, .Stepper button {
+	min-height: 2.25rem;
+	padding: 0.3rem 0.55rem;
+	border: 1px solid var(--sim-border);
+	border-radius: 0.4rem;
+	background: var(--color-bg);
+	color: var(--color-fg);
+	font: inherit;
+	font-size: 0.78rem;
+	cursor: pointer;
+	touch-action: manipulation;
+	transition: background 150ms, border-color 150ms, box-shadow 150ms;
+}
+
+.Playback button:hover, .ControlSet button:not(:disabled):hover, .ControlSet select:hover {
+	border-color: var(--sim-accent);
+	color: var(--sim-accent);
+}
+
+.Playback button:focus-visible, .ControlSet button:focus-visible, .ControlSet select:focus-visible, .Stepper button:focus-visible {
+	outline: 3px solid color-mix(in srgb, var(--sim-accent) 34%, transparent);
+	outline-offset: 2px;
+}
+
+.Playback .Play {
+	border-color: var(--sim-accent);
+	background: var(--sim-accent);
+	color: var(--sim-play-ink);
+}
+
+.Selected {
+	border-color: var(--sim-accent) !important;
+	color: var(--sim-accent) !important;
+	background: color-mix(in srgb, var(--sim-accent) 8%, var(--color-bg)) !important;
+}
+
+.Stepper { gap: 0.2rem; }
+.Choice { gap: 0.2rem; }
+.Stepper button {
+	width: 2rem;
+	padding: 0;
+	font-size: 1rem;
+	line-height: 1;
+}
+.Stepper button:disabled { opacity: 0.35; cursor: not-allowed; }
+.Playback button { display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; border-color: transparent; }
+.Playback .Play { min-width: 5.1rem; }
+.Playback .Play:hover { background: color-mix(in srgb, var(--sim-accent) 88%, #000); color: var(--sim-play-ink); }
+.Playback svg { width: 14px; height: 14px; }
+
+.RunState {
+	flex: 0 0 auto;
+	gap: 0.6rem;
+}
+
+.Clock {
+	color: var(--sim-muted);
+	font-size: 0.78rem;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.PlaybackStatus, .Running {
+	position: relative;
+	padding-left: 0.75rem;
+	font-size: 0.75rem;
+	font-weight: 700;
+	white-space: nowrap;
+}
+
+.PlaybackStatus::before, .Running::before {
+	position: absolute;
+	top: 50%;
+	left: 0;
+	width: 0.4rem;
+	height: 0.4rem;
+	border-radius: 50%;
+	content: "";
+	transform: translateY(-50%);
+}
+
+.PlaybackStatus { color: var(--sim-muted); }
+.PlaybackStatus::before { background: var(--sim-border); }
+.Running { color: var(--color-fg); }
+.Running::before { background: var(--sim-accent); }
+
+.SceneCanvas {
+	display: block;
+	width: 100%;
+	height: var(--desktop-scene-height, 420px);
+	color: var(--color-fg);
+	background: var(--color-bg);
+}
+
+.QueueMeter {
+	display: flex;
+	align-items: center;
+	gap: 0.7rem;
+	padding: 0.85rem 1.25rem;
+	border-top: 1px solid var(--sim-border);
+	background: var(--sim-faint);
+	font-size: 0.75rem;
+}
+
+.QueueMeter > span { color: var(--sim-muted); }
+.QueueMeter > strong {
+	min-width: 2.75rem;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.QueueTrack {
+	flex: 1 1 auto;
+	overflow: hidden;
+	height: 0.4rem;
+	border-radius: 99px;
+	background: color-mix(in srgb, var(--color-fg) 10%, transparent);
+}
+
+.QueueTrack i {
+	display: block;
+	height: 100%;
+	border-radius: inherit;
+	background: var(--sim-accent);
+	transition: width 180ms ease;
+}
+
+.Metrics {
+	display: grid;
+	grid-template-columns: repeat(5, 1fr);
+	margin-top: 0;
+	border-block: 1px solid var(--sim-border);
+}
+
+.Metrics > div {
+	display: flex;
+	min-width: 0;
+	flex-direction: column;
+	gap: 0.15rem;
+	padding: 1rem;
+	border-left: 1px solid var(--sim-border);
+}
+
+.Metrics > div:first-child { border-left: 0; }
+.Metrics span {
+	overflow: hidden;
+	color: var(--sim-muted);
+	font-size: 0.7rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.Metrics strong { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.035em; font-variant-numeric: tabular-nums; }
+.Metrics .MetricWarning strong { color: var(--sim-accent); }
+
+.EndpointDetails { padding: 0.25rem 1.25rem; font-size: 0.8rem; }
+.EndpointDetails summary { cursor: pointer; padding-block: 0.65rem; font-weight: 500; color: var(--sim-muted); }
+.EndpointDetails summary:focus-visible { outline: 2px solid var(--sim-accent); outline-offset: 2px; }
+.EndpointTable { overflow-x: auto; max-height: 24rem; }
+.EndpointTable p { margin: 0 0 0.6rem; color: var(--sim-muted); }
+.EndpointTable table { width: 100%; border-collapse: collapse; text-align: left; font-variant-numeric: tabular-nums; }
+.EndpointTable table + table { margin-top: 0.75rem; }
+.EndpointTable th, .EndpointTable td { padding: 0.4rem; border-bottom: 1px solid var(--sim-border); }
+
+.ScreenReaderSummary {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+@media (max-width: 760px) {
+	.Toolbar { align-items: stretch; flex-direction: column; gap: 0.45rem; }
+	.PlaybackRow { justify-content: space-between; }
+	.ControlSets { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+	.Playback button, .ControlSet button, .ControlSet select, .Stepper button { min-height: 44px; }
+	.SceneCanvas { height: var(--mobile-scene-height, 528px); }
+	.Metrics { grid-template-columns: repeat(2, 1fr); }
+	.Metrics > div:nth-child(3), .Metrics > div:nth-child(5) { border-left: 0; }
+	.Metrics > div:nth-child(n+3) { border-top: 1px solid var(--sim-border); }
+	.Metrics > div:last-child { grid-column: 1 / -1; }
+	.Toolbar { padding: 0.75rem; }
+}
+
+@media (max-width: 460px) {
+	.Task { align-items: flex-start; flex-direction: column; gap: 0.2rem; }
+	.ControlSets { gap: 0.5rem; }
+	.ControlSet { padding: 0.55rem; }
+	.RunState { gap: 0.45rem; }
+	.Task { padding-inline: 0.85rem; }
+	.Conditions { padding-inline: 0.85rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.QueueTrack i { transition: none; }
+}
+
+@media (prefers-color-scheme: dark) {
+	:global(:root:not([data-theme="light"])) .Simulator { --sim-accent: #ee967c; --sim-success: #6bc7a1; --sim-play-ink: #241812; }
+}
+:global([data-theme="dark"]) .Simulator { --sim-accent: #ee967c; --sim-success: #6bc7a1; --sim-play-ink: #241812; }
+@media (prefers-reduced-motion: reduce) {
+	.Simulator button, .Simulator select { transition: none; }
+}

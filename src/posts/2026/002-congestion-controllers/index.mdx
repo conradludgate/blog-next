@@ -1,0 +1,253 @@
+import BlogPost from "@/layouts/BlogPost";
+
+export default function Layout({ children }) {
+  return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+import CongestionSimulator from "@/components/CongestionSimulator";
+
+export const meta = {
+  title: "Why static limits don’t fit an autoscaled Postgres proxy",
+  date: "2026-09-06",
+  tags: ["dev", "performance", "distributed-systems"],
+  desc: "How an autoscaled proxy fleet overwhelmed Postgres, and why limiting connection attempts helped.",
+};
+
+*This is part one of a two-part series. [Part two builds the adaptive controller.](/posts/adaptive-congestion-control)*
+
+This series began with a production problem. At work, I maintain a Postgres proxy for Neon/Lakebase. Each region runs several proxy instances for high availability, shared by many thousands of active databases. Behind them are thousands of Postgres VMs running different workloads on different compute sizes. Both fleets scale up and down over time.
+
+Clients connect to the proxy, which establishes the corresponding connection to Postgres. Forwarding every attempt immediately could overwhelm a Postgres VM. Throttling attempts and limiting how many were in flight worked better.
+
+The unit we are limiting is **connection establishment**, not the lifetime of an open session or the number of concurrent SQL queries. Once an attempt finishes, it releases its permit; the established connection can remain open. This is not a replacement for Postgres’s connection limit.
+
+The difficult part was choosing the limit. Each proxy sees only its own traffic. Adding proxies increases the number of independent senders; resizing a Postgres VM or changing its workload changes how quickly it can accept connections. A limit must follow both.
+
+This part uses fixed rate and fixed concurrency to explain the problem. That is a teaching sequence, not our production chronology: our first controller was AIMD. Part two follows the move from AIMD to Gradient2 and explores the design questions around it.
+
+## 1. Follow one connection
+
+In the diagrams, a **client** is a proxy instance, a **worker** is a destination, and each dot is a connection attempt. Start with just one of each. The client waits for its current attempt to finish before sending another.
+
+Run the simulator, then change service time to **3s**. Follow a dot as it travels to the worker and stays there longer. Use **½ speed** or **Pause** to inspect it.
+
+<CongestionSimulator challenge="request-path" />
+
+The next attempt starts later even though we did not change a rate setting. Keeping work in flight bounded makes admissions respond to duration. We will return to that effect after trying a fixed rate.
+
+Every experiment starts fresh. Only the controls relevant to its question are enabled; scrolling away pauses it, and returning preserves its state.
+
+The model includes network delay, a bounded worker queue, and service time. It does not implement TCP, Postgres, retries, timeouts, or upstream arrivals. Each client always has more work available. Later examples allow several interchangeable workers; unrelated databases are never interchangeable destinations.
+
+### Why not just send everything?
+
+An overloaded destination must make incoming work wait somewhere. Removing an application queue can move that waiting into socket state or the kernel’s accept queue. Callers still pay the latency, and retries can add more load before the destination has recovered.
+
+Holding attempts at the proxy gives us a place to bound waiting and enforce deadlines before consuming downstream resources. That queue must have a limit too: if it is full, or an attempt cannot be admitted before its deadline, waiting longer is not a solution.
+
+The question is how much work to let through. First, let’s make the cost of waiting visible.
+
+## Act one: learn to see congestion
+
+### 2. Make the work visible
+
+A request is not an abstract counter. From the client’s point of view it begins when the call is admitted and ends when the response returns. In between, it passes through several distinct stages:
+
+1. travel from the client to the chosen worker;
+2. wait in that worker’s queue;
+3. receive service from the worker; and
+4. travel back to the client.
+
+All four consume the request’s deadline; only service advances the worker’s operation. A real client usually observes their sum. The simulator ends an attempt when service completes, without a separate return-network stage, so its displayed RTT is a simplified duration.
+
+That distinction matters whenever we interpret latency. Suppose a worker takes one second to process a request. An observed duration of three seconds does not mean the operation itself became three times as expensive. The request may have spent two seconds waiting behind earlier work. Conversely, a worker can become slower without forming a queue if admissions fall quickly enough. The same end-to-end metric can therefore describe different internal states.
+
+Throughout the visualisations, moving dots are requests. A dot crossing the middle is in the network or being routed; a dot parked in front of a worker is queued; a dot attached to a worker is being processed. Pausing freezes the motion without changing the model. This is not just decoration: the physical position of a request explains why its measured duration can be much greater than its service time.
+
+A longer duration tells us something changed. The visible queue helps explain what.
+
+### 3. Name the health signals
+
+We need more than one number to describe whether this system is behaving well. Two familiar sets of signals give us a useful vocabulary.
+
+**RED** describes the request path:
+
+- **Rate:** how much work is offered and how much completes.
+- **Errors:** how much work is rejected or fails.
+- **Duration:** how long work takes, including tail percentiles such as p99. Here the latency metrics include only successful attempts; failures are counted separately.
+
+**USE** describes the worker resources:
+
+- **Utilisation:** how much of the available service capacity is busy.
+- **Saturation:** how much work is waiting for that capacity.
+- **Errors:** whether the resource itself is failing work.
+
+Neither family is sufficient alone. A worker can be fully utilised while every request completes with excellent latency; 100% utilisation is not automatically an incident. A request path can also be slow while workers appear under-utilised because the waiting occurs in a client, connection pool, or network queue that the worker cannot see.
+
+The simulator therefore avoids one synthetic “health” score. The top-level metrics report completed and offered rate, rejection, duration, utilisation, and queue depth separately. Endpoint details then break those observations down by client and worker. When a later controller improves p99 latency, we will still ask whether it did so by preserving useful throughput or merely by leaving workers idle.
+
+This vocabulary also makes recovery less ambiguous. Errors may stop as soon as a bounded queue is no longer full, while latency remains elevated until the existing queue drains. A single green light would hide that interval. RED and USE let us say precisely what recovered, and what has not.
+
+## Act two: build a realistic request path
+
+### 4. Open the load balancer
+
+It is tempting to draw a horizontally scaled service as one queue feeding a bank of interchangeable workers. That model quietly gives the load balancer powers that real deployments often do not have.
+
+Workers normally accept connections or requests independently. Each has its own executor, connection limits, and bounded queue. Once a request has been sent to worker 1, worker 2 cannot reach across the network and take it simply because it became idle first. A proxy can maintain a centralised queue, but that is a deliberate architecture with its own memory, availability, fairness, and head-of-line-blocking trade-offs—not a free property of load balancing.
+
+Our generalised clients learn a set of worker endpoints and choose one for each request. In the Postgres proxy, routing by database will often reduce that set to one VM; in a replicated service it may contain several eligible destinations. A network load balancer may still provide reachability, but every queued request is attached to the worker already selected for it.
+
+This creates a state that aggregate dashboards can obscure: one worker can be idle while another still has queued work. Total capacity exists, but it is in the wrong place for the decisions we already made. Admission control and placement must therefore be designed together.
+
+### 5. Random placement can waste capacity
+
+Uniform random placement is attractive because it is simple, stateless, and unbiased over a long period. Unfortunately, requests do not experience the long-run average. They experience one particular sequence of choices.
+
+Even when offered load is below total service capacity, independent random choices sometimes cluster on the same worker. With short queues and variable service times, those small clusters create head-of-line waiting while another worker is ready. The average throughput may still look fine, but the unlucky requests inflate the latency tail.
+
+Making the queue global would hide this placement error by allowing the next available worker to take any job. In our per-worker topology the client needs to avoid creating the imbalance in the first place. It needs a better choice that remains cheap and decentralised.
+
+### 6. Two random choices are surprisingly powerful
+
+The “Power of Two Choices” rule makes one small change: sample two distinct workers at random, compare them, and send the request to the better candidate. That extra observation dramatically reduces accidental concentration while retaining constant decision cost and avoiding a scan across the whole fleet.
+
+We still need to define “better.” Choosing the endpoint with the lowest raw latency is not enough. A naturally fast worker may already have many requests in flight, while a slightly slower worker is idle. A useful first approximation is:
+
+```text
+score = (in_flight + 1) × smoothed_RTT
+```
+
+The `+1` includes the proposed request. This is a ranking heuristic, not a prediction of queue time: in-flight work includes network and service time, and RTT already includes waiting. Two clients can score the same worker differently because they have seen different requests.
+
+All controllers use this same sampling and placement rule. Their admission decisions can produce different subsequent request sequences, but we do not switch routing algorithms between comparisons.
+
+*Reference:* [Mitzenmacher’s original treatment of the Power of Two Choices](https://www2.eecs.berkeley.edu/Pubs/TechRpts/1996/7979.html) develops the randomized-allocation result behind this routing rule.
+
+### 7. Every endpoint needs local memory
+
+A service-wide average cannot support that decision. The client needs an endpoint table containing at least:
+
+- requests currently in flight;
+- a recent latency estimate;
+- recent successes and failures;
+- the age of the last observation; and
+- eventually, that endpoint’s congestion-control state.
+
+This table exists per client. With `C` clients and `W` workers, there can be `C × W` independently evolving client–worker relationships. In the proxy, the practical key is the destination Postgres compute, and the table can be created lazily for endpoints a proxy actually contacts. Two proxy instances may hold different connection-latency estimates and different limits for the same VM because neither observes the other’s attempts directly.
+
+Newly discovered endpoints begin cold. They must not silently inherit the fleet average: a replacement instance might have different hardware, a cold cache, or a failure mode that the existing workers do not share. Nor should a cold endpoint be treated as infinitely bad and starved of the requests needed to measure it.
+
+Routing and congestion control use this same memory but answer different questions. Routing asks, “which of these candidates looks better?” Congestion control asks, “is it safe to send another request there at all?” Keeping those questions separate will become important when both sampled workers are busy.
+
+Try adding destinations to see why that state is per endpoint. This example starts with one worker and one in-flight permit per endpoint. Run it, note the completed rate, then add workers until there are four. The client gains a separate permit for each new destination.
+
+<CongestionSimulator challenge="concurrency-worker-scale" />
+
+Completed throughput rises as the client uses the new endpoints. This is why we keep limits per destination: a single global window would not automatically make room for added capacity.
+
+## Act three: fixed limits meet a changing fleet
+
+### 8. The fixed-rate baseline
+
+A rate limiter answers a narrow question: how often may this client start work? It does not care whether the selected worker is fast, slow, idle, queued, or recently replaced. That simplicity is useful. A fixed rate is easy to reason about, easy to enforce, and often entirely adequate when the environment is stable.
+
+We apply the limit per destination rather than sharing one global proxy budget across thousands of unrelated databases. In the simulated replicated service, if one client may send `0.5` requests per second to each of four workers, its maximum aggregate rate is `2/s`. Adding a worker adds another `0.5/s` budget, allowing the client to discover new service capacity without reconfiguring its global rate.
+
+The cost of that convenience is an assumption: `0.5/s` must be safe for every worker and the total contributed by every client must remain safe for the fleet. The number was tuned against one particular client count, worker count, and processing-time distribution. Nothing in the limiter tells it when those assumptions stop being true.
+
+### 9. Horizontal clients multiply the rate
+
+A reasonable local rate becomes a much larger system-wide rate when the proxy fleet scales horizontally. Every new proxy creates its own endpoint table and its own complete set of rate budgets. Existing proxies do not know that they should surrender part of theirs.
+
+With four workers and a `0.5/s` per-endpoint rate, one client can offer `2/s`. Two clients can offer `4/s`; eight can offer `16/s`. Autoscaling the caller has multiplied pressure on the callee even though no configuration value changed.
+
+Run the experiment, then add clients one at a time. Predict the combined rate budget before each click; actual admissions can be lower when the sampled endpoints are not eligible. Continue until waiting persists and the bounded queues begin to reject work.
+
+<CongestionSimulator challenge="fixed-rate-client-scale" />
+
+The checks deliberately require a sustained observation. A queue containing one request for a single tick may be harmless scheduling noise; a queue that stays occupied for five seconds is a changed operating point. Notice that completed throughput eventually stops tracking offered throughput. Extra admissions are buying delay and rejection, not more useful capacity.
+
+A fixed per-client rate therefore encodes an assumption about client count that autoscaling is free to invalidate.
+
+### 10. More workers change the answer too
+
+Scaling or resizing the Postgres fleet changes the correct answer in the other direction. A larger VM can accept connection work more quickly; a smaller or busier VM may need a lower limit. Replacement also makes old observations stale even when the database identity is unchanged. In the general replicated-service model, adding workers exposes new capacity while removing them concentrates work onto the survivors.
+
+Removal has awkward transient semantics too. Requests already assigned to a departing worker cannot be teleported into another queue. They must finish while the endpoint drains, be cancelled, or fail and re-enter the normal retry and admission path. Pretending otherwise makes scale-down look much safer than it is.
+
+We now have incompatible requirements for a static number. It should grow when workers are added, shrink when clients are added, and change again when either side is removed. Replica counts are only proxies for the capacity and demand we actually care about. Even perfect discovery cannot make a fixed rate adapt to the next problem: a worker whose speed changes in place.
+
+### 11. Processing time is not constant
+
+Capacity changes even when replica counts do not. For Postgres connection establishment, VM size, CPU pressure, authentication work, process startup, and the database’s current workload all affect how quickly new sessions can be accepted. A rate that was conservative a moment ago can become excessive without any deployment or discovery event.
+
+The next experiment begins below capacity. Keep the controller and topology fixed, start the simulation, and change service time from one second to three seconds. The rate budget will not move. Watch the queues grow, then compare completed rate, duration, and rejection.
+
+<CongestionSimulator challenge="fixed-rate-slowdown" />
+
+The first visible effect is not necessarily an error. Workers remain busy for longer, so the same arrivals begin to occupy their queues. Duration rises before the hard queue limit is reached; only then does rejection appear. A loss-only alarm sees the last stage of the problem.
+
+Rate controls arrivals, but it does not directly bound the amount of unfinished work created by slower responses.
+
+### 12. The bounded queues have a job to do
+
+The simulator rejects an attempt immediately when the worker queue is full. A real kernel queue need not produce such a clean signal: a full TCP listen backlog can lead to ignored attempts and retransmissions rather than an immediate error. Linux also distinguishes incomplete handshakes from established sockets waiting for the application to accept them. See [`listen(2)`](https://man7.org/linux/man-pages/man2/listen.2.html).
+
+In our production incident, the TCP accept queue filled and we saw high connection latencies and timeouts. Its finite size bounded that queue, but did not keep connection establishment healthy.
+
+The bound is protection, not a target. A queue does not need to be full before it becomes harmful. Every occupied slot represents a request paying additional latency without increasing the worker’s instantaneous throughput. When demand falls, rejection stops as soon as space reappears, but duration remains elevated until the old work drains.
+
+This is why the simulator attributes rejections to the selected worker and keeps them separate from cancellations caused by topology changes. A controller can learn from a worker refusing work; it should not interpret a client being removed as evidence that the worker is overloaded.
+
+Loss is therefore both valuable and late. We should use it, but we can avoid depending on it as our first congestion signal.
+
+### 13. Replace rate with work in flight
+
+A concurrency limit bounds connection attempts that have started but not finished. A permit is associated with one Postgres endpoint and is returned only when that attempt succeeds or fails. A slow database cannot consume the permits assigned to an unrelated healthy endpoint.
+
+This small change makes the admission rate sensitive to duration. If requests take three times as long, each permit remains occupied for roughly three times as long, so the client naturally starts work less often. We have not measured capacity or changed the configured limit; feedback arrives through the lifetime of the permit itself.
+
+Repeat the same processing-time change with fixed concurrency. Keep the one-client topology, run the experiment, and slow service to three seconds. Compare offered rate, queue depth, and rejection with the fixed-rate result above.
+
+<CongestionSimulator challenge="concurrency-slowdown" />
+
+The fixed window does not make the worker faster. Instead, offered rate falls because unfinished requests retain their places in the window. In this scenario that keeps the server queues empty and avoids sustained rejection.
+
+Concurrency is already a feedback mechanism, but it is incomplete. Someone still has to choose the size of the window. Too small wastes capacity; too large recreates the queue we were trying to avoid.
+
+### 14. Little’s Law connects the measurements
+
+Little’s Law relates the quantities we can observe:
+
+```text
+L = λW
+```
+
+`L` is average work in flight, `λ` is the rate at which that work leaves the system, and `W` is its mean residence time, under stable long-run conditions. All three must describe the same population and measurement boundary. Do not multiply successful throughput by successful latency and call the result total in-flight work when failures also occupy the system. Nor can p99 replace the mean.
+
+With no failures, one completion per second and a mean duration of 1.3 seconds imply 1.3 attempts in flight on average. Rearranging gives `λ = L / W`: if an occupied concurrency window stays fixed while duration grows, throughput falls. A configured limit bounds concurrency; it is not necessarily the measured average `L`.
+
+The word “average” is important. A controller target of `1.3` requests is meaningful even though an individual request is indivisible. Rounding it to an integer throws away information and creates abrupt changes around every boundary. Later we will use the target and measured RTT to pace discrete requests at the corresponding average rate.
+
+Little’s Law translates between units. It does not tell us whether `1.3` is a safe operating point. To choose a target, we first need to understand what happens as unfinished work increases.
+
+*Reference:* John Little’s paper, [“A Proof for the Queuing Formula: L = λW”](https://pubsonline.informs.org/doi/10.1287/opre.9.3.383), establishes the relationship under broad steady-state conditions.
+
+### 15. Find the knee in each worker
+
+At low concurrency, adding another request in flight can increase throughput by keeping the worker busy across network gaps and scheduling delays. Eventually the worker reaches capacity. Beyond that point, extra concurrency mostly becomes a queue: throughput flattens while duration rises sharply.
+
+The bend between those regions is the **knee**. It is not one universal queue depth or utilisation percentage. A worker’s useful window depends on service time, internal parallelism, network delay, and the shape of its workload. Two nominally identical replicas can have different knees for long periods.
+
+We would like to operate near the knee: enough work in flight to keep capacity useful, but not enough to maintain a costly queue. A manually configured window can hit that point only for the conditions in which it was tuned.
+
+A congestion controller automates the search. It probes upward while the path appears healthy and retreats when its feedback says that added work has become waiting. Different controllers mainly disagree about which signal to trust and how quickly to respond.
+
+## What we have built
+
+We began with hidden waiting and ended with a concrete client-side model: discover workers, sample two candidates, score them from local endpoint state, and admit work through a per-worker concurrency window. Bounded worker queues remain a last line of defence rather than the desired operating point.
+
+Fixed concurrency is a substantial improvement over fixed rate because duration feeds back into admissions automatically. It still leaves one number for a human to choose. Finding the knee showed what an adaptive controller must do next: probe for useful capacity, recognise when added work has become waiting, and retreat without waiting for the queue to fill.
+
+[Part two builds that feedback loop.](/posts/adaptive-congestion-control) It begins with loss, moves the signal earlier with Vegas and Gradient2, turns fractional windows into paced admissions, and then confronts fairness, stale observations, and autoscaling.

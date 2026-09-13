@@ -1,0 +1,244 @@
+import BlogPost from "@/layouts/BlogPost";
+
+export default function Layout({ children }) {
+  return <BlogPost meta={meta}>{children}</BlogPost>;
+}
+
+import CongestionSimulator from "@/components/CongestionSimulator";
+
+export const meta = {
+  title: "Adaptive connection limiting: from AIMD to Gradient2",
+  date: "2026-09-13",
+  tags: ["dev", "performance", "distributed-systems"],
+  desc: "How a Postgres proxy moved from loss-based AIMD to latency-sensitive Gradient2.",
+};
+
+*This is part two of a two-part series. [Part one explains why fixed limits fail.](/posts/congestion-controllers)*
+
+[Part one](/posts/congestion-controllers) began with the production system that motivated this work: several regional proxy instances serve thousands of Postgres VMs for Neon/Lakebase. Each proxy limits its own downstream connection attempts, each destination runs a different workload on a potentially different VM size, and both fleets change independently.
+
+Fixed concurrency already responds to slower connection establishment by reducing admissions, but someone still has to choose the window. A static number was clearly not going to survive that topology, so our first adaptive controller was AIMD. Rejections and timeouts were obvious congestion signals: increase cautiously while attempts succeed, then cut the limit when they fail.
+
+We found that the Linux kernel’s TCP accept queue was filling, with high connection latencies and timeouts. Waiting for those timeouts meant reacting after substantial waiting had already accumulated. We pivoted to Gradient2 to use rising connection latency as an earlier signal.
+
+The production path was AIMD to Gradient2. Vegas provides a useful explanation of delay-based control along the way. Pacing, fairness, and exploration then raise broader design questions; the discussion is not a claim that every mechanism described here was deployed in our proxy.
+
+The goal is not one perfect controller. It is a client pipeline in which every mechanism has one job: routing chooses where work should go, feedback estimates how much is safe, pacing decides when it leaves, and bounded queues contain mistakes.
+
+## Act one: close the feedback loop
+
+### 1. AIMD learns from loss
+
+Additive Increase, Multiplicative Decrease—AIMD—turns a fixed window into a feedback loop: increase by a small amount while work succeeds, then reduce the target by a proportion on congestion. The retreat is faster than the probe.
+
+Our simulator uses successful attempts for increase and queue rejection for backoff. A production implementation must classify failures: invalid credentials, for example, are not evidence of congestion. Timeouts can indicate overload, but also failures elsewhere in the path.
+
+Over time the target traces a sawtooth: slow growth, a sharp drop, then slow growth again. The asymmetry is intentional. Capacity should be explored without producing a large burst, but evidence of overload should remove pressure quickly.
+
+Run this example, then add two clients. Watch the queue and rejection rate. Open **Endpoint details** to see individual limits increase and retreat; their changes need not happen together.
+
+<CongestionSimulator challenge="aimd-client-scale" />
+
+Rejection means the bounded queue has already run out of room. That is the weakness we want to address next: can a successful but increasingly slow attempt tell us to back off sooner?
+
+The feedback remains local. A rejection from worker 2 reduces the window that this client uses for worker 2; it does not reset every endpoint in the client, much less every other client. That isolation is valuable when only one worker is slow, but it also means that every client must discover the congestion for itself.
+
+AIMD is simple and robust, but its signal is deliberately late. In our case, the kernel accept queue could already be full before connection attempts timed out. We already had an earlier observation available at the proxy—connection duration was rising while the queue filled—so the next question was whether the client could retreat before loss.
+
+### 2. Vegas listens to delay
+
+Vegas is a useful stepping stone even though our production path moved from AIMD to Gradient2. It shows the simplest way to turn delay into an earlier congestion signal. For each endpoint it remembers the lowest round-trip time it has observed and compares that baseline with the current RTT. If the current sample is larger, the difference is presumed to be queueing.
+
+For a target window `L`, the simulator estimates queued work as:
+
+```text
+queued ≈ L × (1 - minimum_RTT / current_RTT)
+```
+
+If the estimate is below a lower threshold, Vegas increases its target. If it is above an upper threshold, Vegas decreases it. Between the thresholds it holds steady. Successful RTT samples drive the estimate; rejection remains a harder signal that causes an immediate multiplicative backoff.
+
+This can respond while a queue is forming rather than waiting for it to become full. Compared with AIMD, a well-calibrated delay controller can preserve similar useful throughput with lower p99 latency and much less loss.
+
+The qualification matters. Vegas has not measured queue time directly. It inferred it from a baseline, and both the quality of that baseline and the behaviour of competing clients affect the result.
+
+Try a different disturbance here. Let the client gather some successful samples, then change service time to **3s**. Watch RTT and limits in **Endpoint details**, alongside the queue. A rising RTT can change the target even when requests still succeed.
+
+<CongestionSimulator challenge="vegas-slowdown" />
+
+The controller sees the slowdown, but it cannot tell directly how much came from service and how much came from waiting. That ambiguity is the cost of using delay.
+
+*Reference:* Brakmo and Peterson introduced the delay-based mechanism in [“TCP Vegas: End to End Congestion Avoidance on a Global Internet”](https://doi.org/10.1109/49.464716).
+
+### 3. Delay feedback is local
+
+Every proxy observes only its own connection attempts. Two proxies can infer different minimum RTTs, build different smoothing histories, and settle on different limits for the same Postgres VM. There is no global coordinator quietly dividing capacity into equal shares.
+
+That independence is easy to lose in a simulation. When a client is added here, existing clients retain their endpoint histories and limits. The newcomer begins cold. When a worker is added, each client receives a new cold endpoint without resetting its knowledge of the old ones.
+
+Start the next experiment and add two clients. Open the endpoint details after their tables have warmed. Compare their limits and completed rates rather than looking only at aggregate throughput.
+
+<CongestionSimulator challenge="vegas-client-scale" />
+
+The controller targets do not need to match for aggregate throughput to look stable. That is precisely the point: a local measurement can be internally consistent while still encoding an accident of arrival order. The fairness values in endpoint details make that difference visible instead of averaging it away.
+
+### 4. Gradient2 follows the trend
+
+This is where the production story returns. Rather than relying on one minimum RTT, Gradient2 compares short- and long-term latency estimates. A short-term estimate above the longer-term baseline suggests delay is growing. That gives the controller a reason to retreat before attempts fail. Convergence is not proof of an empty queue: both estimates can settle at an elevated latency.
+
+The simulator uses a Gradient2-inspired variant, not a reproduction of Netflix’s implementation or our production configuration. Its two exponentially weighted estimates warm up before trend decisions; sustained divergence triggers backoff followed by a cooldown. It also uses a minimum-RTT queue estimate as a guard when both averages flatten. Rejection triggers immediate backoff.
+
+This variant trades dependence on a single baseline for more tuning choices: smoothing periods, divergence threshold, trend count, cooldown, and adjustment gains. Those are choices in this model, not a universal Gradient2 recipe.
+
+Repeat the slowdown with Gradient2. Let the initial RTT estimates warm up, open **Endpoint details**, then select **3s** service time. Compare **Short RTT** and **Long RTT**: the short estimate moves first. Watch the target react as that gap develops.
+
+<CongestionSimulator challenge="gradient2-slowdown" />
+
+Both estimates eventually include the slower service. A shrinking gap does not mean service became fast again; it means the longer-term estimate caught up.
+
+*Reference:* Netflix’s [`concurrency-limits`](https://github.com/Netflix/concurrency-limits) project describes the Vegas and Gradient2 algorithms that inspired this model.
+
+Whichever delay signal we choose, the controller produces a target that can be fractional. We still need a mechanism that decides exactly when discrete requests leave.
+
+### 5. Turn a fractional window into a smooth rate
+
+Rounding a target of `1.3` down to one request wastes the additional capacity the controller discovered. Rounding it up to two may maintain exactly the queue it was trying to remove. Alternating between integer semaphore sizes also tends to release work in bursts.
+
+Little’s Law gives us a smoother implementation. For each client–worker pair, derive an admission rate from the target `L` and smoothed RTT `W`:
+
+```text
+λ = L / W
+```
+
+A GCRA-style theoretical-arrival clock spaces requests at that rate. A target of `1.3` influences the spacing between individual admissions rather than requiring a fractional permit.
+
+This targets average concurrency; it does **not** enforce a hard in-flight cap. If latency jumps before the estimate catches up, work can accumulate above the target. A production design that needs a strict ceiling must enforce one separately.
+
+The pacing state belongs to the endpoint, just like RTT estimates and the target. Sending elsewhere does not reset its clock. If neither sampled endpoint is eligible, the simulated client retains its pending choice and waits. This is not a model of an upstream queue with arrivals and deadlines.
+
+Pacing does not create capacity, and short measurement windows can make it appear slower than a burst. Over a sufficiently long interval, paced and bursty implementations of the same average target should offer comparable work. The useful difference is lower queue peaks, not a magically higher rate.
+
+## Act two: share capacity and handle change
+
+### 6. Why a clean minimum RTT is hard
+
+A newly started proxy that arrives behind an existing queue may never observe the unloaded path. Its first successful connection includes queueing delay, yet that attempt establishes the best baseline it knows. Relative to the inflated minimum, later congestion looks smaller than it really is.
+
+The opposite failure is possible too. A minimum RTT that never expires can become stale after routing changes, hardware replacement, or a permanent shift in service time. Expire it too eagerly, however, and persistent congestion can establish a new, higher “minimum” that teaches the controller to accept the queue.
+
+Natural variation makes the separation harder. RTT combines propagation, routing, scheduling, service, and waiting; the client cannot label those components from one sample. A clean baseline usually requires an interval in which the queue is deliberately drained, plus occasional exploration to discover that an endpoint’s condition has changed.
+
+Delay is earlier feedback than loss, but it is not free information. The system must create opportunities to refresh the model on which that feedback depends.
+
+### 7. The polite client can lose
+
+Delay-based control is not automatically fair. Imagine a fixed-rate client competing with a Vegas client for the same worker. As the queue grows, Vegas yields while the fixed-rate client keeps offering the same load. The fixed-rate client can retain a larger share; if its load alone is excessive, Vegas cannot drain the queue by backing off.
+
+Unequal shares can also persist between two adaptive clients. An established or higher-rate client may begin with a larger window. If both reduce their limits proportionally, the ratio between them can survive every backoff. Reversing arrival order can reverse the result.
+
+This is why endpoint details include completed rate per client and a Jain fairness score. For throughputs `x₁ … xₙ`, the score is:
+
+```text
+fairness = (Σx)² / (n × Σx²)
+```
+
+For nonzero total throughput, it is `1` when shares are equal and falls as they diverge. Equal shares are not always the policy we want—clients may have different weights—but stable aggregate throughput alone cannot establish fairness.
+
+Low latency is a system outcome. Voluntary restraint is a client behaviour. They align only when participants react compatibly, or when a scheduler at the contested resource enforces the desired allocation.
+
+### 8. Probe, drain, and leave headroom
+
+Fairness and model freshness both require convergence mechanisms. A controller that only reacts to its current observations can become trapped by them: routing away from an endpoint removes samples, an inflated minimum RTT hides a queue, and proportional backoff preserves unequal shares.
+
+The following are possible extensions, not phases implemented by this simulator. BBR-style control suggests three useful patterns:
+
+- **Probe up:** occasionally test whether more capacity is available. Jitter the timing so every client does not increase in lockstep.
+- **Drain:** occasionally reduce outstanding work long enough to seek an unloaded RTT sample.
+- **Cruise with headroom:** avoid occupying every last unit of estimated capacity, giving smaller or newly arrived flows room to gather evidence.
+
+Loss, explicit overload responses, or ECN-like server feedback can remain a harder second signal. They tell the controller to retreat even if its delay model is stale.
+
+These phases have a real cost. Draining can briefly under-utilise a worker; probing can briefly increase latency. Hiding that cost would make the comparison meaningless. The objective is not perfect instantaneous utilisation but better convergence after the world changes.
+
+Probing can improve fairness, but it cannot guarantee it. Strict allocation belongs in a scheduler at the resource where clients actually contend.
+
+*Reference:* [The BBR Internet-Draft](https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/) develops bandwidth probing and RTT-refresh mechanisms for transport congestion control.
+
+### 9. Routing and admission must cooperate
+
+Power of Two asks **where** a request should go. The endpoint controller asks **whether it should go now**. Those decisions share state, but they are not interchangeable.
+
+For a database route with one eligible Postgres VM, the first decision is already made and only admission remains. The two-choice path applies when the same work can use multiple replicas or endpoints; it is an extension of the original proxy problem, not a claim that every database connection is freely movable.
+
+After sampling two workers, the client scores both and tries the better candidate first. If that endpoint has no admission budget, the second may accept the request. If neither is eligible, the client waits until one of those choices gains capacity.
+
+Retaining the candidates preserves the routing policy. Repeatedly drawing new pairs until one accepts would still respect each endpoint’s admission limit, but would turn two-choice placement into a search for any available budget. That changes the load distribution and can make routing more expensive under saturation.
+
+Client-side waiting must remain bounded and deadline-aware. A request that cannot be admitted in time should fail before consuming downstream resources. Retries return to the same decision path; they do not receive a secret route around the controller.
+
+The client therefore needs both a placement policy and endpoint-specific admission control.
+
+### 10. Stale endpoints need exploration
+
+Good routing creates an information problem. When a worker becomes slow, its score rises and Power of Two sends it less work. Fewer requests mean fewer RTT samples. If the worker later recovers, its stale estimate can keep it looking bad, so the decision that protected us during failure can starve healthy capacity indefinitely.
+
+Random candidate selection gives every endpoint a chance of being reconsidered. For stronger recovery guarantees, a production design could add bounded probe eligibility for endpoints that repeatedly lose the comparison. This is another extension beyond the simulator: occasionally admit a probe despite a pessimistic score, jitter its timing across clients, and back off after failure.
+
+Cold endpoints should be neither infinitely attractive nor permanently bad. Treating them as perfect sends an arrival burst to every new replica; treating them as unusable means they never warm. A small explicit probe budget states the trade-off honestly.
+
+Exploration spends a little known-good capacity to learn whether the world changed. Without it, an adaptive system can be excellent at remembering failures and terrible at noticing recovery.
+
+### 11. Scaling without magical coordination
+
+One last experiment: run the four-worker fleet, then remove two workers. Watch completed throughput and rejection during the transition. Inspect the surviving endpoint limits; they keep their histories instead of starting over.
+
+<CongestionSimulator challenge="gradient2-worker-removal" />
+
+There is less capacity now, so recovery does not mean returning to the old throughput. It means continuing useful work at the smaller fleet’s capacity without persistent rejection.
+
+With `C` proxy instances and `W` active Postgres destinations, the system can contain up to `C × W` independently evolving endpoint controllers, although a real implementation can create them lazily. Adding a proxy creates cold state for every destination it contacts. Replacing or adding a Postgres VM creates one cold endpoint in each proxy that reaches it. Existing pairs retain their histories; nothing recomputes an equal global share.
+
+This is more state than one service-wide limiter, but it is state about the thing we need to control. A slow worker should reduce only the windows targeting it. A client with an unusual network path should not overwrite every other client’s latency estimate.
+
+In the simulator, removing a client or worker cancels affected jobs without counting them as server rejections. Surviving endpoint histories remain intact. Real cancellation is less immediate: abandoning an attempt locally does not guarantee that all downstream work has stopped. Production scale-down needs explicit draining and deadline handling.
+
+These transients are algorithm behaviour, not animation noise. In an autoscaled deployment the system may spend much of its life warming new pairs, draining old ones, and adapting to a moving topology. A controller that looks wonderful only after 150 quiet seconds has not solved the production problem.
+
+### 12. Read the whole system, not one metric
+
+A controller can reduce latency by underfeeding workers. It can raise utilisation by maintaining a queue. It can improve aggregate throughput while starving one client, or balance workers while moving all the waiting into clients. Every one of those changes can make a chosen dashboard number look better.
+
+Evaluate the whole loop with the vocabulary from [part one](/posts/congestion-controllers):
+
+- **RED:** offered and completed rate, rejection, and p50/p99 duration;
+- **USE:** worker utilisation, queue saturation, and worker failures;
+- **fairness:** completed shares by client and worker;
+- **recovery:** the transient after clients, workers, or service time change.
+
+Breakdowns matter as much as totals. Aggregate utilisation can hide one hot worker beside one idle worker. Aggregate throughput can hide a client receiving almost nothing. A low server queue can hide a large client-side queue. The location of waiting is part of the result.
+
+The deterministic tests record checkpoints and per-client, per-worker statistics for selected scenarios. They check behaviours such as fixed-rate overload after scale-out and reduced admissions under fixed concurrency when work slows. These are regression tests for the model, not proof of production stability or a benchmark of the original algorithms. Upstream waiting, retries, and timeouts need separate evaluation because this simulator does not model them.
+
+There is no single best controller independent of whether the objective is latency, utilisation, stability, fairness, or recovery speed.
+
+### 13. The final lesson
+
+The pieces now have distinct jobs:
+
+1. endpoint discovery determines the possible destinations;
+2. when several destinations are eligible, Power of Two chooses two candidates without scanning the fleet;
+3. per-endpoint measurements estimate the state of each path;
+4. a controller decides how much unfinished work is safe;
+5. a pacing clock turns that target into smooth admissions; and
+6. small bounded queues absorb short mismatches and reject work before waiting becomes unbounded.
+
+The design does not make overload impossible. Demand can jump faster than any sampled controller reacts, all workers can fail together, and deadlines can be shorter than the available service capacity permits. The goal is a feedback loop that notices change, limits the damage, and recovers without requiring a centralised coordinator to know every client and worker.
+
+Fixed rate remains a good answer when its assumptions are stable. Fixed concurrency is a remarkably effective next step because duration feeds back into admissions automatically. Delay controllers move the signal earlier, but pay for that advantage with baseline, fairness, exploration, and tuning problems. Pacing preserves fractional decisions, while bounded queues and loss remain essential safety signals rather than evidence that the rest of the design failed.
+
+For our Postgres proxy, the decisive observation was the full accept queue: waiting for timeouts let too much work accumulate. That motivated our move from AIMD to Gradient2. The broader model helps explore what happens when proxies restart, VMs resize, or independent controllers disagree about the same endpoint.
+
+The durable question is not “which limiter should I copy?” It is:
+
+> When the system changes, which observation causes this limit to change with it?
+
+If the answer is “a human edits configuration,” the limit is fixed even if the implementation is sophisticated. If the answer is a local measurement, ask how it becomes stale, how competing clients respond, and what happens during the transient. That is the difference between a number that worked yesterday and a congestion-control system.

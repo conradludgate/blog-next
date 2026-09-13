@@ -7,39 +7,43 @@ export default function Layout({ children }) {
 import CongestionSimulator from "@/components/CongestionSimulator";
 
 export const meta = {
-  title: "Why fixed limits fail in distributed systems",
+  title: "Why static limits don’t fit an autoscaled Postgres proxy",
   date: "2026-09-06",
   tags: ["dev", "performance", "distributed-systems"],
-  desc: "From hidden queues and load balancing to per-worker concurrency limits.",
+  desc: "How an autoscaled proxy fleet overwhelmed Postgres, and why limiting connection attempts helped.",
 };
 
 *This is part one of a two-part series. [Part two builds the adaptive controller.](/posts/adaptive-congestion-control)*
 
-When one service calls another, sending requests faster is not always better. As downstream workers approach capacity, queues form, latency rises, and requests begin to miss their deadlines. Retrying those requests creates more demand at exactly the moment the service has the least capacity to spare. Push hard enough and useful throughput can fall even as every part of the system gets busier.
+This series began with a production problem. At work, I maintain a Postgres proxy for Neon/Lakebase. Each region runs several proxy instances for high availability, shared by many thousands of active databases. Behind them are thousands of Postgres VMs running different workloads on different compute sizes. Both fleets scale up and down over time.
 
-Backpressure can protect the service, but it leaves the caller with a difficult decision. It must estimate how much work each downstream worker can accept, decide where the next request should go, and sometimes wait instead of sending immediately. That decision becomes harder when both services are horizontally scaled, processing time varies, and no replica has a complete view of the system.
+Clients connect to the proxy, and the proxy establishes the corresponding connection to Postgres. We found that simply forwarding every connection attempt as soon as it arrived could overwhelm a Postgres VM. Limiting the number of downstream connection attempts in flight worked better: excess attempts waited briefly at the proxy rather than piling into a less controllable queue around Postgres.
 
-In this first part, we will build that decision from first principles. We will make the queues visible, distribute requests across independently queued workers, and compare fixed rate with fixed concurrency as the client and worker fleets change.
+The difficult part was choosing the limit. One proxy instance sees only its own traffic. Adding another proxy adds another independent source of connection attempts, while replacing or resizing a Postgres VM changes the capacity on the other side. The databases themselves range from quiet development projects to demanding production workloads. No static number describes all of those combinations for long.
+
+This first part builds the problem from first principles. We will make the hidden queues visible and compare fixed rate with fixed concurrency as both sides change. This is an explanatory sequence rather than the production chronology: we already knew a static limit would not survive this topology, so our first real controller was AIMD. [Part two](/posts/adaptive-congestion-control) follows that implementation path.
+
+The simulator also generalises the topology so that a client can sometimes choose between several eligible workers. In the original proxy path, routing a database to one Postgres VM is the one-candidate case.
 
 By the end, we will have a realistic request path and a way to recognise the useful operating point of each worker. [Part two](/posts/adaptive-congestion-control) turns those measurements into adaptive per-worker limits and paced admissions, then deals with fairness, stale observations, and production scaling.
 
 ## Prelude: why not just send everything?
 
-Imagine two services in the same distributed system. The first receives or produces work and calls the second to complete part of it. We will call them the **client service** and the **worker service**, but those names describe their roles in this one interaction. The client service may itself be a worker for something further upstream.
+In the diagrams, a **client** is a proxy instance and a **worker** is a destination Postgres VM. Each coloured dot is an attempt to establish a downstream connection. The worker’s small FIFO abstracts the finite places where connection establishment can wait—most importantly the kernel’s TCP listen and accept path, but also scheduling and startup work inside the process.
 
-Both sides are horizontally scaled. Several independent client instances send requests to several independent workers. Each worker has finite processing capacity and a small queue. The network adds some latency, endpoint discovery changes over time, and individual workers sometimes become faster or slower. No client knows exactly how much total demand exists, and no worker knows how much work all of the clients are about to send.
+The model is intentionally broader than the incident. Some services have several interchangeable workers or read replicas, in which case the client also chooses a destination. A database route may expose only one eligible VM, in which case the choice is trivial but the admission problem is unchanged. Each proxy still needs local state for every Postgres endpoint it is actively contacting.
 
-The tempting policy is to send every request as soon as it arrives. If the selected worker cannot accept it, return an error and let the caller retry.
+The tempting policy is to begin every downstream connection as soon as the upstream client arrives. If Postgres cannot accept it, return an error and let the client retry.
 
 This works while demand is comfortably below capacity. More requests produce more completed work, so the system appears to reward us for driving it harder. The problem begins near saturation. A worker can only process so many requests at once; additional requests must wait. Every waiting request consumes time and usually some combination of memory, connection state, task state, and deadline budget without increasing the worker’s useful throughput.
 
-Removing an explicit application queue does not remove this waiting. It moves it. Requests can accumulate in a caller, a connection pool, an HTTP/2 stream limit, a socket buffer, a load balancer, an executor, or the operating-system scheduler. The caller experiences all of these locations as increased latency, even when the worker’s own queue appears empty.
+Removing an explicit application queue does not remove this waiting. It moves it. Connection attempts can accumulate in the proxy, in socket state, in the kernel’s SYN or accept queues, or behind scheduling inside Postgres. The caller experiences all of these locations as increased connection latency even when no application-level queue is visible.
 
 Eventually requests wait longer than their deadlines. Some may still reach the worker and consume resources even though the caller no longer wants their answers. Others are cancelled, rejected, or retried. A retry is particularly dangerous during overload: it turns evidence that the system has too much work into another piece of work. If many callers make the same reasonable local decision, they can keep a recovering service overloaded long after the original burst has ended.
 
 Real services can also lose useful capacity under pressure. They spend more time managing queues, allocating memory, switching tasks, contending on locks, cleaning up cancelled work, and producing responses that arrive too late to be useful. Offered load continues to rise while completed, useful throughput flattens or even falls.
 
-The alternative is to apply backpressure before every request enters the worker service. When a worker appears busy, the client can hold a request briefly and admit it when capacity becomes available. Waiting at the client makes the queue intentional: it can be bounded, included in the request deadline, cancelled before consuming downstream resources, and paced so that released work does not arrive in another burst.
+The alternative is to apply backpressure before each downstream connection attempt. When a Postgres endpoint appears busy, the proxy can hold the attempt briefly and admit it when capacity becomes available. Waiting at the proxy makes the queue intentional: it can be bounded, included in the connection deadline, cancelled before consuming downstream resources, and paced so that released work does not arrive in another burst.
 
 This does not mean waiting forever. If the client-side queue is full or the request cannot be dispatched within its deadline, rejection is the honest outcome. Otherwise backpressure would merely exchange server overload for unbounded memory growth and enormous latency in the caller. Retries must enter the same admission path as original attempts; they cannot be allowed to bypass the very mechanism protecting the service.
 
@@ -54,13 +58,13 @@ The rest of the article will answer those questions by changing one part of a ru
 
 ## 1. A limit that worked yesterday
 
-Start with one client and four workers. Every coloured dot is a request, and every worker has a small queue of its own. The client samples two workers and uses its own latency and in-flight observations to choose between them. That routing policy stays the same throughout these experiments.
+Start with one proxy and four workers. Every coloured dot is a downstream connection attempt, and every worker has a small queue of its own. Where multiple destinations are eligible, the proxy samples two and uses its own latency and in-flight observations to choose between them. A singleton destination follows the same admission path without the comparison.
 
 First we limit how often requests can start. Each client may send at most half a request per second to each worker. This is a local budget: adding another client adds another set of budgets. No existing client is told to give up part of its allowance.
 
 Each interactive section introduces a fresh copy of the same simulator, already configured for the idea beside it. The controls do not perform a scripted demonstration: the experiment describes an outcome, and you must decide which ordinary client, worker, processing-time, or controller control will produce it. The checks turn green only after the simulator observes the result.
 
-Watch **completed throughput** as well as offered load. More arrivals do not necessarily mean more useful work. The queue shows waiting directly, while duration includes the time successful requests spend getting to the worker, waiting, and being processed.
+Watch **completed throughput** as well as offered load. More attempts do not necessarily mean more established connections. The queue shows waiting directly, while duration includes the time successful attempts spend reaching the worker, waiting, and being accepted.
 
 The rate and concurrency experiments later in the article begin from the same healthy one-client topology and apply the same processing-time increase. A rate budget does not shrink when work becomes slower. A concurrency permit stays occupied until the request finishes, so the rate of new admissions falls naturally. Compare their responses rather than treating the absolute numbers as a controller benchmark.
 
@@ -119,7 +123,7 @@ It is tempting to draw a horizontally scaled service as one queue feeding a bank
 
 Workers normally accept connections or requests independently. Each has its own executor, connection limits, and bounded queue. Once a request has been sent to worker 1, worker 2 cannot reach across the network and take it simply because it became idle first. A proxy can maintain a centralised queue, but that is a deliberate architecture with its own memory, availability, fairness, and head-of-line-blocking trade-offs—not a free property of load balancing.
 
-Our clients instead learn a set of worker endpoints and choose one for each request. A network load balancer may still provide reachability, but the client owns the scheduling decision and every queued request is attached to the worker already selected for it.
+Our generalised clients learn a set of worker endpoints and choose one for each request. In the Postgres proxy, routing by database will often reduce that set to one VM; in a replicated service it may contain several eligible destinations. A network load balancer may still provide reachability, but every queued request is attached to the worker already selected for it.
 
 This creates a state that aggregate dashboards can obscure: one worker can be idle while another still has queued work. Total capacity exists, but it is in the wrong place for the decisions we already made. Admission control and placement must therefore be designed together.
 
@@ -129,7 +133,7 @@ Uniform random placement is attractive because it is simple, stateless, and unbi
 
 Even when offered load is below total service capacity, independent random choices sometimes cluster on the same worker. With short queues and variable service times, those small clusters create head-of-line waiting while another worker is ready. The average throughput may still look fine, but the unlucky requests inflate the latency tail.
 
-Making the queue global would hide this placement error by allowing the next available worker to take any job. In our per-worker topology the client needs to avoid creating the imbalance in the first place. It needs a better choice that remains cheap and decentralized.
+Making the queue global would hide this placement error by allowing the next available worker to take any job. In our per-worker topology the client needs to avoid creating the imbalance in the first place. It needs a better choice that remains cheap and decentralised.
 
 ### 6. Two random choices are surprisingly powerful
 
@@ -157,7 +161,7 @@ A service-wide average cannot support that decision. The client needs an endpoin
 - the age of the last observation; and
 - eventually, that endpoint’s congestion-control state.
 
-This table exists per client. With `C` clients and `W` workers, there are `C × W` independently evolving client–worker relationships. Two clients may hold different RTT estimates and different limits for the same worker because neither observes the other’s requests directly.
+This table exists per client. With `C` clients and `W` workers, there can be `C × W` independently evolving client–worker relationships. In the proxy, the practical key is the destination Postgres compute, and the table can be created lazily for endpoints a proxy actually contacts. Two proxy instances may hold different connection-latency estimates and different limits for the same VM because neither observes the other’s attempts directly.
 
 Newly discovered endpoints begin cold. They must not silently inherit the fleet average: a replacement instance might have different hardware, a cold cache, or a failure mode that the existing workers do not share. Nor should a cold endpoint be treated as infinitely bad and starved of the requests needed to measure it.
 
@@ -169,13 +173,13 @@ Routing and congestion control use this same memory but answer different questio
 
 A rate limiter answers a narrow question: how often may this client start work? It does not care whether the selected worker is fast, slow, idle, queued, or recently replaced. That simplicity is useful. A fixed rate is easy to reason about, easy to enforce, and often entirely adequate when the environment is stable.
 
-We apply the limit per worker rather than dividing one global client budget across the discovered endpoints. If one client may send `0.5` requests per second to each of four workers, its maximum aggregate rate is `2/s`. Adding a worker adds another `0.5/s` budget, allowing the client to discover new service capacity without reconfiguring its global rate.
+We apply the limit per destination rather than sharing one global proxy budget across thousands of unrelated databases. In the simulated replicated service, if one client may send `0.5` requests per second to each of four workers, its maximum aggregate rate is `2/s`. Adding a worker adds another `0.5/s` budget, allowing the client to discover new service capacity without reconfiguring its global rate.
 
 The cost of that convenience is an assumption: `0.5/s` must be safe for every worker and the total contributed by every client must remain safe for the fleet. The number was tuned against one particular client count, worker count, and processing-time distribution. Nothing in the limiter tells it when those assumptions stop being true.
 
 ### 9. Horizontal clients multiply the rate
 
-A reasonable local rate becomes a much larger system-wide rate when the client service scales horizontally. Every new client creates its own endpoint table and its own complete set of rate budgets. Existing clients do not know that they should surrender part of theirs.
+A reasonable local rate becomes a much larger system-wide rate when the proxy fleet scales horizontally. Every new proxy creates its own endpoint table and its own complete set of rate budgets. Existing proxies do not know that they should surrender part of theirs.
 
 With four workers and a `0.5/s` per-endpoint rate, one client can offer `2/s`. Two clients can offer `4/s`; eight can offer `16/s`. Autoscaling the caller has multiplied pressure on the callee even though no configuration value changed.
 
@@ -189,7 +193,7 @@ A fixed per-client rate therefore encodes an assumption about client count that 
 
 ### 10. More workers change the answer too
 
-Scaling the worker service changes the correct answer in the other direction. A single global rate cannot use new capacity unless someone increases it. A per-worker rate discovers added capacity naturally, but removing workers also removes their budgets and concentrates existing work onto the survivors.
+Scaling or resizing the Postgres fleet changes the correct answer in the other direction. A larger VM can accept connection work more quickly; a smaller or busier VM may need a lower limit. Replacement also makes old observations stale even when the database identity is unchanged. In the general replicated-service model, adding workers exposes new capacity while removing them concentrates work onto the survivors.
 
 Removal has awkward transient semantics too. Requests already assigned to a departing worker cannot be teleported into another queue. They must finish while the endpoint drains, be cancelled, or fail and re-enter the normal retry and admission path. Pretending otherwise makes scale-down look much safer than it is.
 
@@ -197,7 +201,7 @@ We now have incompatible requirements for a static number. It should grow when w
 
 ### 11. Processing time is not constant
 
-Capacity changes even when replica counts do not. Cache misses, noisy neighbours, garbage collection, heterogeneous hardware, and differences in request cost all change service time. A rate that was conservative a moment ago can become excessive without any deployment or discovery event.
+Capacity changes even when replica counts do not. For Postgres connection establishment, VM size, CPU pressure, authentication work, process startup, and the database’s current workload all affect how quickly new sessions can be accepted. A rate that was conservative a moment ago can become excessive without any deployment or discovery event.
 
 The next experiment begins below capacity. Keep the controller and topology fixed, start the simulation, and change service time from one second to three seconds. The configured arrival rate will not move. Watch utilisation, waiting, duration, and finally rejection respond in that order.
 
@@ -209,7 +213,7 @@ Rate controls arrivals, but it does not directly bound the amount of unfinished 
 
 ### 12. The bounded queues have a job to do
 
-A bounded queue converts unlimited waiting into explicit rejection. That protects memory, connections, and deadline budget from growing without limit. It also provides an unambiguous signal that a particular worker could not accept more work.
+A bounded queue converts unlimited waiting into explicit rejection. That protects memory, connection state, and deadline budget from growing without limit. In the production failure that motivated this work, however, the relevant bound was not initially an application queue we controlled: the Linux TCP accept queue filled first. By the time attempts timed out, connection latency had already been warning us that work was accumulating.
 
 The bound is protection, not a target. A queue does not need to be full before it becomes harmful. Every occupied slot represents a request paying additional latency without increasing the worker’s instantaneous throughput. When demand falls, rejection stops as soon as space reappears, but duration remains elevated until the old work drains.
 
@@ -219,7 +223,7 @@ Loss is therefore both valuable and late. We should use it, but we can avoid dep
 
 ### 13. Replace rate with work in flight
 
-A concurrency limit bounds requests that have started but not finished. A permit is associated with one endpoint and is returned only when that request completes or is rejected. A slow endpoint cannot consume the permits of a healthy neighbour.
+A concurrency limit bounds connection attempts that have started but not finished. A permit is associated with one Postgres endpoint and is returned only when that attempt succeeds or fails. A slow database cannot consume the permits assigned to an unrelated healthy endpoint.
 
 This small change makes the admission rate sensitive to duration. If requests take three times as long, each permit remains occupied for roughly three times as long, so the client naturally starts work less often. We have not measured capacity or changed the configured limit; feedback arrives through the lifetime of the permit itself.
 
